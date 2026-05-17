@@ -8,7 +8,8 @@ package cliapp
 
 import (
 	"encoding/json"
-	"sort"
+	"maps"
+	"slices"
 
 	"github.com/spf13/cobra"
 )
@@ -19,10 +20,5 @@ func WriteJSON(cmd *cobra.Command, value any) error {
 }
 
 func SortedMapKeys[V any](values map[string]V) []string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
+	return slices.Sorted(maps.Keys(values))
 }
