@@ -3,7 +3,7 @@ package main
 // explain.go owns the `pk explain modules` subcommand, which prints the
 // 9-module OSS essentials pack with the metadata each module declares as
 // public constants. Detailed port wiring lives in each module's docs and in
-// the catalog's Compose() output; for v0.0.0 we surface the catalog overview
+// the catalog's Compose() output; for v0.1.0 we surface the catalog overview
 // only.
 //
 // ADR: ADR-0029 (file purpose declaration).
@@ -39,7 +39,7 @@ func newExplainCmd() *cobra.Command {
 		Use:   "explain",
 		Short: "Inspect the OSS module catalog",
 		Long: "explain surfaces the OSS module catalog so downstream developers " +
-			"can quickly see what comes in the v0.0.0 essentials pack without " +
+			"can quickly see what comes in the v0.1.0 essentials pack without " +
 			"booting a PlatformKit application.",
 	}
 	cmd.AddCommand(newExplainModulesCmd())
@@ -89,7 +89,7 @@ func runExplainModules(w io.Writer, asJSON bool) error {
 		enc.SetIndent("", "  ")
 		return enc.Encode(infos)
 	}
-	fmt.Fprintln(w, "PlatformKit OSS module catalog (v0.0.0):")
+	fmt.Fprintln(w, "PlatformKit OSS module catalog (v0.1.0):")
 	for _, m := range infos {
 		fmt.Fprintf(w, "  %-25s %s — %s\n", m.ID, m.Name, m.Description)
 	}

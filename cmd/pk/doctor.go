@@ -30,7 +30,7 @@ type doctorCheck struct {
 	Run  func(ctx context.Context) (status string, ok bool, err error)
 }
 
-// minGoMinor is the minimum supported go1.X release. v0.0.0 of PlatformKit
+// minGoMinor is the minimum supported go1.X release. v0.1.0 of PlatformKit
 // OSS is built against go 1.26 but the spec keeps the floor at 1.22 so users
 // on older toolchains see a clear failure rather than an opaque build error.
 const minGoMinor = 22
