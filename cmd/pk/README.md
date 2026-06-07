@@ -2,7 +2,7 @@
 
 `pk` is the developer CLI for the PlatformKit OSS workspace. It is intentionally
 small: three subcommands that cover the day-1 needs of someone exploring or
-hacking on the v0.0.0 essentials pack.
+hacking on the v0.1.0 essentials pack.
 
 ## Install
 

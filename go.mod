@@ -3,8 +3,8 @@ module github.com/septagon-oss/pk-tools
 go 1.26
 
 require (
-	github.com/septagon-oss/pk-core v0.0.0
-	github.com/septagon-oss/pk-modules v0.0.0
+	github.com/septagon-oss/pk-core v0.1.0
+	github.com/septagon-oss/pk-modules v0.1.0
 	github.com/spf13/cobra v1.10.2
 )
 
