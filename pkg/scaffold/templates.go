@@ -357,7 +357,7 @@ func New%sFeature() module.Feature {
 
 	// Capabilities
 	b.Service("%sService", "1.0.0", "%s service", "Service").
-		Permissions("%s:read", "%s:write")
+		Permissions("%s:view", "%s:manage")
 
 	return b.Build()
 }
@@ -369,7 +369,7 @@ func New%sFeature() module.Feature {
 		moduleName, moduleName, featureName,
 		pascalFeature, pascalFeature,
 		pascalFeature, pascalFeature,
-		featureName, featureName,
+		moduleName, moduleName,
 	)
 
 	handlerGo := fmt.Sprintf(`package %s
@@ -624,10 +624,10 @@ var _ module.SectionRenderer = (*%sSectionRenderer)(nil)
 // generateRegistrationCode generates the code snippet to register a module in the Bundle registry.
 func generateRegistrationCode(moduleName string) map[string]string {
 	return map[string]string{
-		"bundleEntry":  fmt.Sprintf(`{"%s", %s.NewModule, %s.GetFeatures},`, moduleName, moduleName, moduleName),
+		"bundleEntry":  fmt.Sprintf(`{ID: "%s", New: %s.NewModule, Features: %s.GetFeatures},`, moduleName, moduleName, moduleName),
 		"import":       fmt.Sprintf(`%s "example.com/platformkit/business-modules/%s"`, moduleName, moduleName),
 		"usage":        fmt.Sprintf("platformmodules.NewModuleSet().WithModules(%q)", moduleName),
-		"file":         "platformkit-business-modules/catalog/moduleregistry/registry.go",
-		"instructions": "1. Add the module import to catalog/moduleregistry/registry.go\n2. Add a defaultEntries row with NewModule and GetFeatures\n3. Add the ID to defaultModuleIDs only if it belongs in the default preset",
+		"file":         "platformkit-business-modules/catalog/moduleregistry/bundle.go",
+		"instructions": "1. Add the module import to catalog/moduleregistry/bundle.go\n2. Add a defaultEntries row with ID, New, and Features\n3. Add the ID to defaultModuleIDs only if it belongs in the default preset",
 	}
 }
