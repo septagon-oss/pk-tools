@@ -12,10 +12,6 @@ github.com/ncruces/go-strftime v1.0.0/go.mod h1:Fwc5htZGVVkseilnfgOVb9mKy6w1naJm
 github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec h1:W09IVJc94icq4NjY3clb7Lk8O1qJ8BdBEF8z0ibU0rE=
 github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec/go.mod h1:qqbHyh8v60DhA7CoWK5oRCqLrMHRGoxYCSS9EjAz6Eo=
 github.com/russross/blackfriday/v2 v2.1.0/go.mod h1:+Rmxgy9KzJVeS9/2gXHxylqXiyQDYRxCVz55jmeOWTM=
-github.com/septagon-oss/pk-core v0.1.0 h1:wxjj5MZnu9rfXYc8X+ncC+4eaHtMksyE1wJJ3UtmNr8=
-github.com/septagon-oss/pk-core v0.1.0/go.mod h1:JGW9owR8hG6vRGF6PTl07ybJ/bLigK5dHNJTM0ts83I=
-github.com/septagon-oss/pk-modules v0.1.0 h1:PI7wKYosjtj9pc0a4QmHhTeTwU4yu/sXrIEd+YbVNM4=
-github.com/septagon-oss/pk-modules v0.1.0/go.mod h1:7j3Hx8e04Dh9yNQozQVjfgpFZCXcDVJT0yq8NcC6bC0=
 github.com/spf13/cobra v1.10.2 h1:DMTTonx5m65Ic0GOoRY2c16WCbHxOOw6xxezuLaBpcU=
 github.com/spf13/cobra v1.10.2/go.mod h1:7C1pvHqHw5A4vrJfjNwvOdzYu0Gml16OCs2GRiTUUS4=
 github.com/spf13/pflag v1.0.9/go.mod h1:McXfInJRrz4CZXVZOBLb0bTZqETkiAhM9Iw0y3An2Bg=
