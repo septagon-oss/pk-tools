@@ -30,10 +30,11 @@ type doctorCheck struct {
 	Run  func(ctx context.Context) (status string, ok bool, err error)
 }
 
-// minGoMinor is the minimum supported go1.X release. v0.1.0 of PlatformKit
-// OSS is built against go 1.26 but the spec keeps the floor at 1.22 so users
-// on older toolchains see a clear failure rather than an opaque build error.
-const minGoMinor = 22
+// minGoMinor is the minimum supported go1.X release. PlatformKit OSS is built
+// against go 1.26 (see go.work / the module go.mod files), so the floor is 1.26:
+// users on older toolchains get a clear doctor failure rather than an opaque
+// build error later.
+const minGoMinor = 26
 
 func newDoctorCmd() *cobra.Command {
 	return &cobra.Command{
@@ -53,7 +54,7 @@ func newDoctorCmd() *cobra.Command {
 // so tests can mutate or substitute individual checks.
 func defaultDoctorChecks() []doctorCheck {
 	return []doctorCheck{
-		{Name: "Go version >= 1.22", Run: checkGoVersion},
+		{Name: "Go version >= 1.26", Run: checkGoVersion},
 		{Name: "modernc.org/sqlite pure-Go driver available", Run: checkSQLite},
 		{Name: ":8080 port free for starter-saas", Run: checkPort8080Free},
 		{Name: "GOPATH writable", Run: checkGopathWritable},
