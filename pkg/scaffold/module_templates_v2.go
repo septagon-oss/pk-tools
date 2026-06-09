@@ -107,6 +107,7 @@ func generateModuleFiles(opts ModuleOptions) []GeneratedFile {
 		{Path: "README.md", Content: renderModuleReadme(name, description, category, archetype, moduleTags, moduleFeatures)},
 		{Path: "module_smoke_test.go", Content: renderModuleSmokeTestGo(name)},
 		{Path: "module.manifest.yaml", Content: renderModuleManifestYAML(name, description, category, resourceName, moduleTags, moduleFeatures, moduleEvents, modulePorts)},
+		{Path: "module.skills.yaml", Content: renderModuleSkillsYAML(name, description, moduleTags)},
 		{Path: "contracts/module.go", Content: renderModuleContractsGo(name, description, category, moduleTags)},
 		{Path: "contracts/providers.go", Content: renderModuleProvidersGo(name)},
 		{Path: "contracts/permissions.go", Content: renderModulePermissionsGo(name, pascalName)},
@@ -661,14 +662,18 @@ func renderModuleAuthzGo(name string) string {
 	return fmt.Sprintf(`package %s
 
 %s
-import (
-	"example.com/platformkit/backend-kit/security/authz"
-	contracts "example.com/platformkit/business-modules/%s/contracts"
-)
+import "example.com/platformkit/backend-kit/security/authz"
 
-// ModulePermissionTokens declares the canonical permission tokens exported by this module.
-var ModulePermissionTokens = authz.MustNormalizePermissionTokens(contracts.ModulePermissions())
-`, name, header, name)
+// ModulePermissionTokens declares the canonical permission tokens exported by
+// this module. A []string LITERAL is passed directly (not contracts.ModulePermissions())
+// because the module-contract conformance analyzer reads these tokens via static
+// AST inspection and cannot follow a function call. Keep the tokens and order in
+// sync with contracts.ModulePermissions() and module.manifest.yaml.
+var ModulePermissionTokens = authz.MustNormalizePermissionTokens([]string{
+	%q,
+	%q,
+})
+`, name, header, name+":view", name+":manage")
 }
 
 func renderModuleEntityPermissionsGo(name string) string {
@@ -830,10 +835,12 @@ const (
 	Permission%sManage = %q
 )
 
+// ModulePermissions lists the module's tokens in canonical [view, manage] order,
+// matching authz.ModulePermissionTokens and the module.manifest.yaml permissions.
 func ModulePermissions() []string {
 	return []string{
-		Permission%sManage,
 		Permission%sView,
+		Permission%sManage,
 	}
 }
 `, header, pascalName, name+":view", pascalName, name+":manage", pascalName, pascalName)
@@ -842,18 +849,16 @@ func ModulePermissions() []string {
 func renderModuleRoutesGo(name string) string {
 	header := filePurposeHeader("routes.go", "route-level constants exposed for cross-module reference", "ADR-0009")
 
+	// NOTE: no ModuleEndpoints()/[]module.EndpointDefinition here. The feature-route
+	// single-source-of-truth invariant (#4) requires EndpointDefinition declarations
+	// to live ONLY in feature.go (via FeatureBuilder). Emitting them in contracts/
+	// fails `+"`"+`make check-features`+"`"+` / module-contract-check for supported+ tiers.
 	return fmt.Sprintf(`package contracts
 
 %s
-import "example.com/platformkit/backend-kit/app/module"
-
 const (
 	ModuleAPIBasePath = ModuleBasePath
 )
-
-func ModuleEndpoints() []module.EndpointDefinition {
-	return []module.EndpointDefinition{}
-}
 `, header)
 }
 
@@ -867,13 +872,51 @@ package provides
 %s`, name, header)
 }
 
+// renderModuleSkillsYAML emits module.skills.yaml. The metadata block MUST mirror
+// module.manifest.yaml exactly (name/version/description/tags) — module-contract-check
+// compares the skills manifest's metadata.description against the module manifest's
+// and fails on any drift. Every module needs this file or conformance fails closed.
+func renderModuleSkillsYAML(name, description string, tags []string) string {
+	display := moduleDisplayName(name)
+	var b strings.Builder
+	b.WriteString("apiVersion: platformkit.dev/v1\n")
+	b.WriteString("kind: ModuleSkillsManifest\n")
+	b.WriteString("metadata:\n")
+	b.WriteString("  name: " + name + "\n")
+	b.WriteString("  version: 1.0.0\n")
+	b.WriteString("  description: " + yamlString(description) + "\n")
+	b.WriteString("  author: platformkit Team\n")
+	b.WriteString("  license: MIT\n")
+	if len(tags) > 0 {
+		b.WriteString("  tags:\n")
+		for _, t := range tags {
+			b.WriteString("    - " + t + "\n")
+		}
+	}
+	b.WriteString("skills:\n")
+	b.WriteString("  - id: " + name + ".list\n")
+	b.WriteString("    name: List " + display + " records\n")
+	b.WriteString("    description: " + yamlString("Read-side listing surface for "+name+".") + "\n")
+	b.WriteString("    tags:\n")
+	b.WriteString("      - module\n")
+	b.WriteString("  - id: " + name + ".manage\n")
+	b.WriteString("    name: Manage " + display + " records\n")
+	b.WriteString("    description: " + yamlString("Admin-gated create and update surface for "+name+".") + "\n")
+	b.WriteString("    tags:\n")
+	b.WriteString("      - module\n")
+	b.WriteString("      - admin\n")
+	return b.String()
+}
+
 func renderModuleManifestYAML(name, description, category, resourceName string, tags, features, events, ports []string) string {
 	var b strings.Builder
 	b.WriteString("apiVersion: platformkit.dev/v1\n")
 	b.WriteString("kind: ModuleManifest\n")
 	b.WriteString("metadata:\n")
 	b.WriteString("  name: " + name + "\n")
-	b.WriteString("  version: 0.1.0\n")
+	// Must equal the ModuleVersion const emitted in module.go / contracts/module.go;
+	// module-contract-check fails on metadata.version drift.
+	b.WriteString("  version: 1.0.0\n")
 	b.WriteString("  description: " + yamlString(description) + "\n")
 	b.WriteString("  author: platformkit Team\n")
 	b.WriteString("  license: MIT\n")
