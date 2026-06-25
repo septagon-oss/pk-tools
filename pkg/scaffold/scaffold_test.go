@@ -166,7 +166,6 @@ func TestGenerateModule(t *testing.T) {
 	}
 	expected := []string{
 		"README.md",
-		"admin.go",
 		"authz.go",
 		"contracts/module.go",
 		"contracts/permissions.go",
@@ -182,6 +181,7 @@ func TestGenerateModule(t *testing.T) {
 		"module.go",
 		"module_smoke_test.go",
 		"settings_provider.go",
+		"surfaces.go",
 	}
 	for _, name := range expected {
 		if !fileNames[name] {
