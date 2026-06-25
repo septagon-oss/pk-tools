@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 
 	"github.com/spf13/cobra"
@@ -53,6 +54,7 @@ func runGoStep(ctx context.Context, stdout, stderr io.Writer, dir, label string,
 	cmd := exec.CommandContext(ctx, "go", args...)
 	if dir != "" {
 		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "GOWORK=off")
 	}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
