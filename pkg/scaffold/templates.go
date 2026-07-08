@@ -59,7 +59,8 @@ func generateEntityCode(moduleName, entityName string, fields []Field) string {
 	if len(importLines) > 0 {
 		importLines = append(importLines, "")
 	}
-	importLines = append(importLines,
+	importLines = append(
+		importLines,
 		"\t\"example.com/platformkit/backend-kit/core/entity/providers/base\"",
 		"\t\"example.com/platformkit/backend-kit/core/mcp\"",
 	)
@@ -115,7 +116,8 @@ func (e *%s) MCPQueryFields() []mcp.MCPQueryField {
 func generateEntityTestCode(moduleName, entityName string, _ []Field) string {
 	snakeName := ToSnakeCase(entityName)
 
-	return fmt.Sprintf(`package entities
+	return fmt.Sprintf(
+		`package entities
 
 import (
 	"testing"
@@ -215,7 +217,8 @@ func generateEntityE2ECode(moduleName, entityName string, fields []Field) string
 		featurePkg = strings.ToLower(entityName)
 	}
 
-	return fmt.Sprintf(`package %s
+	return fmt.Sprintf(
+		`package %s
 
 import (
 	"example.com/platformkit/frontend-kit/e2e/config"
@@ -317,7 +320,8 @@ func generateFeatureFiles(moduleName, featureName string, useCases []string) []G
 	pascalFeature := ToPascalCase(featureName)
 	pascalModule := ToPascalCase(moduleName)
 
-	featureGo := fmt.Sprintf(`package %s
+	featureGo := fmt.Sprintf(
+		`package %s
 
 import (
 	"example.com/platformkit/backend-kit/app/module"
@@ -451,7 +455,8 @@ func (s *Service) %s(ctx context.Context) error {
 func generateFeatureTestCode(_, featureName string) string {
 	pascalFeature := ToPascalCase(featureName)
 
-	return fmt.Sprintf(`package %s
+	return fmt.Sprintf(
+		`package %s
 
 import (
 	"testing"
@@ -499,7 +504,8 @@ func TestNew%sFeature_Capabilities(t *testing.T) {
 
 // generateFeatureE2ECode generates a colocated E2E config for a feature.
 func generateFeatureE2ECode(moduleName, featureName string) string {
-	return fmt.Sprintf(`package %s
+	return fmt.Sprintf(
+		`package %s
 
 import (
 	"example.com/platformkit/frontend-kit/e2e/config"
@@ -540,7 +546,8 @@ func generateSectionRendererCode(moduleName, featureName string) string {
 	pascalFeature := ToPascalCase(featureName)
 	sectionPrefix := strings.ReplaceAll(moduleName, "_management", "")
 
-	return fmt.Sprintf(`package %s
+	return fmt.Sprintf(
+		`package %s
 
 import (
 	"context"

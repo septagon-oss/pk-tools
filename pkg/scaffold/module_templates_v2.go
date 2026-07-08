@@ -123,7 +123,8 @@ func generateModuleFiles(opts ModuleOptions) []GeneratedFile {
 	}
 
 	if needsModuleMigrations(archetype) {
-		files = append(files,
+		files = append(
+			files,
 			GeneratedFile{Path: "migrations/README.md", Content: renderMigrationsReadme(name)},
 			GeneratedFile{Path: "migrations/001_initial.up.sql", Content: renderInitialMigrationUp(name)},
 			GeneratedFile{Path: "migrations/001_initial.down.sql", Content: renderInitialMigrationDown(name)},
@@ -134,7 +135,8 @@ func generateModuleFiles(opts ModuleOptions) []GeneratedFile {
 		// Real placeholder files (not .gitkeep) so the //go:embed pattern
 		// in assets_embed.go has at least one matching file in each
 		// embedded directory. Operators replace these with real content.
-		files = append(files,
+		files = append(
+			files,
 			GeneratedFile{Path: "assets_embed.go", Content: renderAssetsEmbedGo(name)},
 			GeneratedFile{Path: "assets_loader.go", Content: renderAssetsLoaderGo(name, pascalName)},
 			GeneratedFile{Path: "translations/en.json", Content: renderPlaceholderTranslation(name, description)},
@@ -575,7 +577,8 @@ func registerModuleInvocations(m *%sModule) {
 func renderModuleSurfacesGo(name, displayName, pascalName, resourceKebab string) string {
 	header := filePurposeHeader("surfaces.go", "declarative admin surface contribution (replaces the legacy AdminRegistrar registration path)", "ADR-0001", "ADR-0009", "ADR-0017")
 
-	return fmt.Sprintf(`package %s
+	return fmt.Sprintf(
+		`package %s
 
 %s
 import (

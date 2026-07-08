@@ -119,7 +119,8 @@ func GenerateEntityWithProfile(moduleName, entityName string, fields []Field, pr
     Name:      %q,
     EnableMCP: true,
 })`,
-		entityName, entityName)
+		entityName, entityName,
+	)
 
 	files := applyImportProfileToFiles([]GeneratedFile{
 		{Path: strings.ToLower(entityName) + ".go", Content: code},
@@ -152,7 +153,8 @@ func GenerateFeatureWithProfile(moduleName, featureName string, useCases []strin
 	testFile := generateFeatureTestCode(moduleName, featureName)
 	e2eFile := generateFeatureE2ECode(moduleName, featureName)
 	rendererFile := generateSectionRendererCode(moduleName, featureName)
-	files = append(files,
+	files = append(
+		files,
 		GeneratedFile{Path: "feature_test.go", Content: testFile},
 		GeneratedFile{Path: "e2e.go", Content: e2eFile},
 		GeneratedFile{Path: "section_renderer.go", Content: rendererFile},
@@ -181,7 +183,8 @@ func AddEntityToFeatureWithProfile(moduleName, featureName, entityName string, f
     Name:      %q,
     EnableMCP: true,
 })`,
-		entityName, entityName)
+		entityName, entityName,
+	)
 
 	files := applyImportProfileToFiles([]GeneratedFile{
 		{Path: strings.ToLower(entityName) + ".go", Content: code},
