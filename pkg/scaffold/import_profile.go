@@ -6,6 +6,7 @@ const (
 	defaultBackendKitImportRoot       = "example.com/platformkit/backend-kit"
 	defaultBusinessModulesImportRoot  = "example.com/platformkit/business-modules"
 	defaultFrontendKitImportRoot      = "example.com/platformkit/frontend-kit"
+	defaultPortsImportRoot            = "example.com/platformkit/ports"
 	defaultBackendKitReplacePath      = "../backend-kit"
 	defaultBusinessModulesReplacePath = "../business-modules"
 )
@@ -18,6 +19,7 @@ type ImportProfile struct {
 	BackendKit                 string `json:"backendKit,omitempty"`
 	BusinessModules            string `json:"businessModules,omitempty"`
 	FrontendKit                string `json:"frontendKit,omitempty"`
+	Ports                      string `json:"ports,omitempty"`
 	BackendKitReplacePath      string `json:"backendKitReplacePath,omitempty"`
 	BusinessModulesReplacePath string `json:"businessModulesReplacePath,omitempty"`
 }
@@ -29,6 +31,7 @@ func DefaultImportProfile() ImportProfile {
 		BackendKit:                 defaultBackendKitImportRoot,
 		BusinessModules:            defaultBusinessModulesImportRoot,
 		FrontendKit:                defaultFrontendKitImportRoot,
+		Ports:                      defaultPortsImportRoot,
 		BackendKitReplacePath:      defaultBackendKitReplacePath,
 		BusinessModulesReplacePath: defaultBusinessModulesReplacePath,
 	}
@@ -45,6 +48,9 @@ func (p ImportProfile) normalized() ImportProfile {
 	if strings.TrimSpace(p.FrontendKit) == "" {
 		p.FrontendKit = defaults.FrontendKit
 	}
+	if strings.TrimSpace(p.Ports) == "" {
+		p.Ports = defaults.Ports
+	}
 	if strings.TrimSpace(p.BackendKitReplacePath) == "" {
 		p.BackendKitReplacePath = defaults.BackendKitReplacePath
 	}
@@ -60,6 +66,7 @@ func applyImportProfile(content string, profile ImportProfile) string {
 		defaultBackendKitImportRoot, profile.BackendKit,
 		defaultBusinessModulesImportRoot, profile.BusinessModules,
 		defaultFrontendKitImportRoot, profile.FrontendKit,
+		defaultPortsImportRoot, profile.Ports,
 		defaultBackendKitReplacePath, profile.BackendKitReplacePath,
 		defaultBusinessModulesReplacePath, profile.BusinessModulesReplacePath,
 	)

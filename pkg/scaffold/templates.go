@@ -220,6 +220,10 @@ func generateEntityE2ECode(moduleName, entityName string, fields []Field) string
 	return fmt.Sprintf(
 		`package %s
 
+// feature_test.go - feature contract tests.
+// Per: ADR-0017.
+// Discipline: C-14.
+
 import (
 	"example.com/platformkit/frontend-kit/e2e/config"
 )
@@ -323,6 +327,10 @@ func generateFeatureFiles(moduleName, featureName string, useCases []string) []G
 	featureGo := fmt.Sprintf(
 		`package %s
 
+// feature.go - feature composition and route ownership.
+// Per: ADR-0017.
+// Discipline: C-14.
+
 import (
 	"example.com/platformkit/backend-kit/app/module"
 	"example.com/platformkit/backend-kit/app/module/helpers"
@@ -352,12 +360,8 @@ func New%sFeature() module.Feature {
 	// Handler with automatic route registration
 	helpers.RouteHandler[*Handler](b, NewHandler)
 
-	// Section renderer for admin UI — uncomment after you add a
-	// section_renderer.go file via "platformkit scaffold feature" or by
-	// hand. The inline module scaffold does not generate one for sub-
-	// features because it would reference an undefined type and break
-	// the build.
-	// helpers.SectionRenderer[*%sSectionRenderer](b, New%sSectionRenderer)
+	// Section renderer for the generated admin surface.
+	helpers.SectionRenderer[*%sSectionRenderer](b, New%sSectionRenderer)
 
 	// Capabilities
 	b.Service("%sService", "1.0.0", "%s service", "Service").
@@ -377,6 +381,10 @@ func New%sFeature() module.Feature {
 	)
 
 	handlerGo := fmt.Sprintf(`package %s
+
+// handler.go - HTTP boundary for the feature.
+// Per: ADR-0017.
+// Discipline: C-14.
 
 import (
 	"github.com/danielgtaylor/huma/v2"
@@ -415,6 +423,10 @@ func (h *Handler) RegisterRoutes(api huma.API) {
 	}
 
 	serviceGo := fmt.Sprintf(`package %s
+
+// service.go - feature application service boundary.
+// Per: ADR-0007, ADR-0017.
+// Discipline: C-14.
 
 import (
 %s	"example.com/platformkit/backend-kit/observability/logger"
@@ -457,6 +469,10 @@ func generateFeatureTestCode(_, featureName string) string {
 
 	return fmt.Sprintf(
 		`package %s
+
+// feature_test.go - feature contract tests.
+// Per: ADR-0017.
+// Discipline: C-14.
 
 import (
 	"testing"
@@ -507,6 +523,10 @@ func generateFeatureE2ECode(moduleName, featureName string) string {
 	return fmt.Sprintf(
 		`package %s
 
+// e2e.go - feature flow contract metadata.
+// Per: ADR-0017.
+// Discipline: C-14.
+
 import (
 	"example.com/platformkit/frontend-kit/e2e/config"
 )
@@ -548,6 +568,10 @@ func generateSectionRendererCode(moduleName, featureName string) string {
 
 	return fmt.Sprintf(
 		`package %s
+
+// section_renderer.go - admin surface renderer for the feature.
+// Per: ADR-0017.
+// Discipline: C-14.
 
 import (
 	"context"

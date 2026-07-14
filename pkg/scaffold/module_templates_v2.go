@@ -96,6 +96,8 @@ func generateModuleFiles(opts ModuleOptions) []GeneratedFile {
 
 	files := []GeneratedFile{
 		{Path: "module.go", Content: renderModuleGo(name, description, category, pascalName, moduleTags, archetype)},
+		{Path: "transactions.go", Content: renderModuleTransactionsGo(name)},
+		{Path: "jobs.go", Content: renderModuleJobsGo(name)},
 		{Path: "metadata.go", Content: renderModuleMetadataGo(name, moduleFeatures)},
 		{Path: "dependencies.go", Content: renderModuleDependenciesGo(name, modulePorts)},
 		{Path: "events.go", Content: renderModuleEventsGo(name, moduleEvents)},
@@ -113,6 +115,12 @@ func generateModuleFiles(opts ModuleOptions) []GeneratedFile {
 		{Path: "contracts/permissions.go", Content: renderModulePermissionsGo(name, pascalName)},
 		{Path: "contracts/routes.go", Content: renderModuleRoutesGo(name)},
 		{Path: "contracts/provides/doc.go", Content: renderProvidesDocGo(name)},
+	}
+	if len(moduleEvents) > 0 {
+		files = append(files, GeneratedFile{
+			Path:    "contracts/events.go",
+			Content: renderModuleEventContractsGo(moduleEvents),
+		})
 	}
 
 	if archetype != "infrastructure" {
@@ -155,6 +163,11 @@ func generateModuleFiles(opts ModuleOptions) []GeneratedFile {
 
 	for _, featureName := range moduleFeatures {
 		featureFiles := generateFeatureFiles(name, featureName, nil)
+		featureFiles = append(featureFiles,
+			GeneratedFile{Path: "feature_test.go", Content: generateFeatureTestCode(name, featureName)},
+			GeneratedFile{Path: "e2e.go", Content: generateFeatureE2ECode(name, featureName)},
+			GeneratedFile{Path: "section_renderer.go", Content: generateSectionRendererCode(name, featureName)},
+		)
 		for _, file := range featureFiles {
 			files = append(files, GeneratedFile{
 				Path:    "features/" + featureName + "/" + file.Path,
@@ -168,6 +181,82 @@ func generateModuleFiles(opts ModuleOptions) []GeneratedFile {
 	})
 
 	return files
+}
+
+func renderModuleTransactionsGo(name string) string {
+	header := filePurposeHeader("transactions.go", "transaction and durable event boundary for module services", "ADR-0007", "ADR-0009")
+	return fmt.Sprintf(`package %s
+
+%s
+import (
+	"context"
+	"fmt"
+
+	"example.com/platformkit/backend-kit/app/event"
+	"example.com/platformkit/backend-kit/core/crud"
+)
+
+// TransactionRunner is the module-owned entry point for state changes that
+// also emit domain events. Use Run so the state write and outbox-backed event
+// are committed together.
+type TransactionRunner struct {
+	unitOfWork *crud.UnitOfWork
+}
+
+func NewTransactionRunner(repository crud.AtomicTransactionRepository, publisher event.EventPublisher) (*TransactionRunner, error) {
+	uow, err := crud.NewUnitOfWork(repository, publisher)
+	if err != nil {
+		return nil, err
+	}
+	return &TransactionRunner{unitOfWork: uow}, nil
+}
+
+func (r *TransactionRunner) Run(ctx context.Context, fn func(*crud.Transaction) error) error {
+	if r == nil || r.unitOfWork == nil {
+		return fmt.Errorf("%s: transaction runner is not configured")
+	}
+	return r.unitOfWork.Run(ctx, fn)
+}
+`, name, header, name)
+}
+
+func renderModuleJobsGo(name string) string {
+	header := filePurposeHeader("jobs.go", "typed tenant-aware job registration helpers", "ADR-0007", "ADR-0009")
+	return fmt.Sprintf(`package %s
+
+%s
+import (
+	"context"
+	"time"
+
+	"example.com/platformkit/backend-kit/infrastructure/jobs"
+)
+
+// ScheduleJob is the module-level safe default for one-shot work.
+func ScheduleJob(ctx context.Context, scheduler jobs.JobScheduler, eventType string, payload any, executeAt time.Time) (string, error) {
+	return jobs.ScheduleOnce(ctx, scheduler, eventType, payload, executeAt)
+}
+
+// ScheduleRecurringJob is the module-level safe default. The key must be
+// stable for the logical schedule, not generated per process.
+func ScheduleRecurringJob(ctx context.Context, scheduler jobs.JobScheduler, key, eventType string, payload any, cronSpec string) (string, error) {
+	return jobs.ScheduleRecurringWithKey(ctx, scheduler, key, eventType, payload, cronSpec)
+}
+
+func ScheduleTypedRecurringJob[T any](ctx context.Context, scheduler jobs.JobScheduler, key, eventType string, envelope jobs.Envelope, input T, cronSpec string) (string, error) {
+	return jobs.ScheduleTypedRecurring(ctx, scheduler, key, eventType, envelope, input, cronSpec)
+}
+
+// NewTypedJob keeps job payload decoding, tenant restoration, deadlines, and
+// idempotency validation in the platform job runtime.
+func NewTypedJob[T any](definition jobs.Definition[T]) (*jobs.TypedHandler[T], error) {
+	return jobs.NewTypedHandler(definition)
+}
+
+func ScheduleTypedJob[T any](ctx context.Context, scheduler jobs.JobScheduler, eventType string, envelope jobs.Envelope, input T, executeAt time.Time) (string, error) {
+	return jobs.ScheduleTyped(ctx, scheduler, eventType, envelope, input, executeAt)
+}
+`, name, header)
 }
 
 func normalizeModuleTags(name, category string, tags []string) []string {
@@ -230,6 +319,67 @@ func normalizeEventNames(events []string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// eventIdentifier turns a dotted event name into a stable Go identifier for
+// the generated typed contract and payload. Separators are intentionally
+// collapsed because event names are transport identifiers, not Go names.
+func eventIdentifier(eventName string) string {
+	parts := strings.FieldsFunc(eventName, func(r rune) bool {
+		return r == '.' || r == '-' || r == '_' || r == '/'
+	})
+	var b strings.Builder
+	for _, part := range parts {
+		b.WriteString(ToPascalCase(part))
+	}
+	name := b.String()
+	if name == "" {
+		return "DeclaredEvent"
+	}
+	if name[0] >= '0' && name[0] <= '9' {
+		return "Event" + name
+	}
+	return name
+}
+
+// uniqueEventIdentifiers allocates deterministic, package-safe identifiers
+// for a normalized event list. It considers the complete set, so a natural
+// name such as FooBar2 cannot collide with a generated suffix for FooBar.
+func uniqueEventIdentifiers(events []string) []string {
+	baseNames := make([]string, len(events))
+	baseCounts := make(map[string]int, len(events))
+	for i, eventName := range events {
+		baseNames[i] = eventIdentifier(eventName)
+		baseCounts[baseNames[i]]++
+	}
+	reservedBases := make(map[string]struct{}, len(baseCounts))
+	for base := range baseCounts {
+		reservedBases[base] = struct{}{}
+	}
+
+	used := make(map[string]struct{}, len(events))
+	identifiers := make([]string, len(events))
+	for i, base := range baseNames {
+		if _, exists := used[base]; !exists {
+			used[base] = struct{}{}
+			identifiers[i] = base
+			continue
+		}
+
+		for suffix := 2; ; suffix++ {
+			candidate := fmt.Sprintf("%s%d", base, suffix)
+			if _, exists := used[candidate]; exists {
+				continue
+			}
+			if _, reserved := reservedBases[candidate]; reserved {
+				continue
+			}
+			used[candidate] = struct{}{}
+			identifiers[i] = candidate
+			break
+		}
+	}
+	return identifiers
 }
 
 // normalizePortNames trims and dedupes port interface names. Names are
@@ -488,45 +638,82 @@ func renderModuleEventsGo(name string, events []string) string {
 	header := filePurposeHeader("events.go", "declared event contracts emitted by this module", "ADR-0018")
 
 	if len(events) == 0 {
-		// No declared events — emit a function returning nil so it
-		// composes cleanly into moduleComposerOptions. Operator can
-		// add events by editing this file or rerunning scaffold.
+		// No declared events — emit a function returning nil so it composes
+		// cleanly into moduleComposerOptions. The typed contract file is only
+		// generated when the module has an event surface.
 		return fmt.Sprintf(`package %s
 
 %s
 import "example.com/platformkit/backend-kit/app/module/providers/standard"
 
-// moduleEventOptions returns the standard.WithEvent declarations for every
-// event this module emits. Add new events via standard.WithEvent and emit
-// them through the outbox (ADR-0007).
-func moduleEventOptions() []standard.ComposerOption {
-	return nil
+	// moduleEventOptions returns the typed event contracts this module emits.
+	// Add new events in contracts/events.go and keep their payloads versioned.
+	func moduleEventOptions() []standard.ComposerOption {
+		return nil
 }
 `, name, header)
 	}
 
 	var b strings.Builder
-	for _, evt := range events {
-		b.WriteString(fmt.Sprintf(`		standard.WithEvent(%q, "TODO: describe %s", map[string]any{
-			"tenantId":  "string",
-			"timestamp": "timestamp",
-		}),`, evt, evt))
+	identifiers := uniqueEventIdentifiers(events)
+	for i := range events {
+		identifier := identifiers[i]
+		b.WriteString(fmt.Sprintf("\t\tstandard.WithEventContract(contracts.%s.Contract()),", identifier))
 		b.WriteString("\n")
 	}
 
 	return fmt.Sprintf(`package %s
 
 %s
-import "example.com/platformkit/backend-kit/app/module/providers/standard"
+import (
+	"example.com/platformkit/backend-kit/app/module/providers/standard"
+	"example.com/platformkit/business-modules/%s/contracts"
+)
 
-// moduleEventOptions returns the standard.WithEvent declarations for every
-// event this module emits. The payload schemas below are starter stubs —
-// fill in the real shape before emitting any event from production code.
+// moduleEventOptions returns the typed event contracts this module emits.
+// Durable delivery is the default; the composer derives the required
+// transactional EventPublisher dependency from these declarations.
 func moduleEventOptions() []standard.ComposerOption {
 	return []standard.ComposerOption{
 %s	}
 }
-`, name, header, b.String())
+`, name, header, name, b.String())
+}
+
+func renderModuleEventContractsGo(events []string) string {
+	header := filePurposeHeader("events.go", "typed event contracts and starter payload schemas", "ADR-0018")
+	var b strings.Builder
+	identifiers := uniqueEventIdentifiers(events)
+	for i, evt := range events {
+		identifier := identifiers[i]
+		b.WriteString(fmt.Sprintf(`// %sPayload is the versioned wire payload for %s.
+// Replace the starter fields with the domain-specific contract before release.
+type %sPayload struct {
+	TenantID  string    `+"`json:\"tenantId\"`"+`
+	Timestamp time.Time `+"`json:\"timestamp\"`"+`
+}
+
+// %s is the canonical typed declaration for %s.
+var %s = port.Event[%sPayload]{
+	Name:       %q,
+	Version:    "1.0.0",
+	Doc:        %q,
+	Durability: port.EventDurabilityDurable,
+}
+
+`, identifier, evt, identifier, identifier, evt, identifier, identifier, evt, fmt.Sprintf("TODO: describe %s", evt)))
+	}
+
+	return fmt.Sprintf(`package contracts
+
+%s
+import (
+	"time"
+
+	"example.com/platformkit/ports/port"
+)
+
+%s`, header, b.String())
 }
 
 func renderModuleInvocationsGo(name, pascalName string) string {
@@ -752,6 +939,8 @@ func renderModuleReadme(name, description, category, archetype string, tags, fea
 	b.WriteString("\n## Structure\n\n")
 	b.WriteString("- `module.go`: module identity and runtime entrypoints\n")
 	b.WriteString("- `metadata.go`: module metadata projection and composer options\n")
+	b.WriteString("- `transactions.go`: transaction-bound state and durable event boundary\n")
+	b.WriteString("- `jobs.go`: typed tenant-aware job and stable schedule helpers\n")
 	b.WriteString("- `dependencies.go`: cross-module dependency declarations\n")
 	b.WriteString("- `invocations.go`: fx wiring for health (group) and translations (registrar)\n")
 	b.WriteString("- `surfaces.go`: declarative admin surface contribution (ADR-0001)\n")
@@ -765,7 +954,8 @@ func renderModuleReadme(name, description, category, archetype string, tags, fea
 	b.WriteString("\n## Notes\n\n")
 	b.WriteString("- Cross-module communication must stay behind `platformkit-business-modules/ports` interfaces (ADR-0009).\n")
 	b.WriteString("- Events go through the outbox, not direct event-bus publishes (ADR-0007).\n")
-	b.WriteString("- Every emitted event must be declared via `standard.WithEvent` (ADR-0018).\n")
+	b.WriteString("- State changes that emit events should use `TransactionRunner` from `transactions.go`.\n")
+	b.WriteString("- Every emitted event must be declared via `standard.WithEventContract` (ADR-0018).\n")
 	b.WriteString("- Every public port method must work over both HTTP and NATS eventbus (ADR-0019).\n")
 	b.WriteString("- After adding or changing features, rerun module normalization and verification.\n")
 	return b.String()
@@ -967,6 +1157,7 @@ func renderModuleManifestYAML(name, description, category, resourceName string, 
 		for _, e := range events {
 			b.WriteString("    - name: " + e + "\n")
 			b.WriteString("      description: TODO describe " + e + "\n")
+			b.WriteString("      durability: durable\n")
 		}
 	} else {
 		b.WriteString("  events: []\n")

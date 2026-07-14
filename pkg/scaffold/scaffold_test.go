@@ -1,6 +1,8 @@
 package scaffold
 
 import (
+	"go/parser"
+	"go/token"
 	"strings"
 	"testing"
 )
@@ -221,6 +223,7 @@ func TestGenerateModuleAppliesImportProfile(t *testing.T) {
 		BackendKit:      "github.com/acme/platformkit-backend-kit",
 		BusinessModules: "github.com/acme/platformkit-business-modules",
 		FrontendKit:     "github.com/acme/platformkit-frontend-kit",
+		Ports:           "github.com/acme/platformkit-ports/port",
 	}
 
 	result := GenerateModuleWithOptions(ModuleOptions{
@@ -248,6 +251,115 @@ func TestGenerateModuleAppliesImportProfile(t *testing.T) {
 	}
 	if strings.Contains(combined, "example.com/platformkit/") {
 		t.Fatal("profiled scaffold output still contains neutral import roots")
+	}
+}
+
+func TestGenerateModuleEmitsTypedEventContracts(t *testing.T) {
+	result := GenerateModuleWithOptions(ModuleOptions{
+		Name:        "stock_exchange_management",
+		Description: "Market data and investment workflows",
+		Category:    "finance",
+		Archetype:   "service",
+		Events: []string{
+			"stock_exchange.order.executed",
+			"stock_exchange.quote.updated",
+		},
+	})
+
+	files := make(map[string]string, len(result.Files))
+	for _, file := range result.Files {
+		files[file.Path] = file.Content
+	}
+
+	events, ok := files["events.go"]
+	if !ok {
+		t.Fatal("scaffold did not produce events.go")
+	}
+	contracts, ok := files["contracts/events.go"]
+	if !ok {
+		t.Fatal("event-bearing scaffold did not produce contracts/events.go")
+	}
+	manifest, ok := files["module.manifest.yaml"]
+	if !ok {
+		t.Fatal("scaffold did not produce module.manifest.yaml")
+	}
+
+	for _, needle := range []string{
+		"standard.WithEventContract(contracts.StockExchangeOrderExecuted.Contract())",
+		"standard.WithEventContract(contracts.StockExchangeQuoteUpdated.Contract())",
+	} {
+		if !strings.Contains(events, needle) {
+			t.Fatalf("events.go missing typed contract wiring %q", needle)
+		}
+	}
+	if strings.Contains(events, "standard.WithEvent(") {
+		t.Fatal("events.go still uses the legacy event map option")
+	}
+
+	for _, needle := range []string{
+		"type StockExchangeOrderExecutedPayload struct",
+		"var StockExchangeOrderExecuted = port.Event[StockExchangeOrderExecutedPayload]{",
+		"Durability: port.EventDurabilityDurable",
+		"type StockExchangeQuoteUpdatedPayload struct",
+	} {
+		if !strings.Contains(contracts, needle) {
+			t.Fatalf("contracts/events.go missing %q", needle)
+		}
+	}
+	for _, needle := range []string{
+		"name: stock_exchange.order.executed",
+		"name: stock_exchange.quote.updated",
+		"durability: durable",
+	} {
+		if !strings.Contains(manifest, needle) {
+			t.Fatalf("module.manifest.yaml missing %q", needle)
+		}
+	}
+
+	if !strings.Contains(files["README.md"], "standard.WithEventContract") {
+		t.Fatal("README.md does not document typed event declarations")
+	}
+}
+
+func TestGenerateModuleEventIdentifiersAvoidSuffixCollisions(t *testing.T) {
+	result := GenerateModuleWithOptions(ModuleOptions{
+		Name:      "events_management",
+		Events:    []string{"events.foo_bar", "events.foo-bar", "events.foo_bar2"},
+		Archetype: "service",
+	})
+
+	files := make(map[string]string, len(result.Files))
+	for _, file := range result.Files {
+		files[file.Path] = file.Content
+	}
+	events := files["events.go"]
+	contracts := files["contracts/events.go"]
+
+	for _, identifier := range []string{"EventsFooBar", "EventsFooBar2", "EventsFooBar3"} {
+		if !strings.Contains(events, "contracts."+identifier+".Contract()") {
+			t.Fatalf("events.go missing unique identifier %q:\n%s", identifier, events)
+		}
+		if !strings.Contains(contracts, "var "+identifier+" = port.Event[") {
+			t.Fatalf("contracts/events.go missing unique declaration %q:\n%s", identifier, contracts)
+		}
+	}
+}
+
+func TestGenerateModuleGoFilesParse(t *testing.T) {
+	result := GenerateModuleWithOptions(ModuleOptions{
+		Name:      "stock_exchange_management",
+		Events:    []string{"stock_exchange.order_executed"},
+		Features:  []string{"orders"},
+		Archetype: "service",
+	})
+
+	for _, file := range result.Files {
+		if !strings.HasSuffix(file.Path, ".go") {
+			continue
+		}
+		if _, err := parser.ParseFile(token.NewFileSet(), file.Path, file.Content, parser.AllErrors); err != nil {
+			t.Errorf("generated %s does not parse: %v", file.Path, err)
+		}
 	}
 }
 
@@ -392,6 +504,35 @@ func TestIsNumericType(t *testing.T) {
 	}
 	if IsNumericType("string") {
 		t.Error("string should not be numeric")
+	}
+}
+
+func TestGenerateModuleIncludesPlatformVerticalSliceBoundaries(t *testing.T) {
+	result := GenerateModuleWithOptions(ModuleOptions{
+		Name:        "inventory_management",
+		Description: "Inventory",
+		Features:    []string{"items"},
+	})
+	files := map[string]string{}
+	for _, file := range result.Files {
+		files[file.Path] = file.Content
+	}
+	for _, path := range []string{"transactions.go", "jobs.go", "features/items/service.go", "features/items/handler.go", "features/items/feature.go", "features/items/feature_test.go", "features/items/e2e.go"} {
+		if files[path] == "" {
+			t.Fatalf("generated module is missing vertical-slice file %q", path)
+		}
+	}
+	if !strings.Contains(files["transactions.go"], "crud.NewUnitOfWork") {
+		t.Fatal("generated transaction boundary does not use crud.UnitOfWork")
+	}
+	if !strings.Contains(files["jobs.go"], "jobs.NewTypedHandler") {
+		t.Fatal("generated job boundary does not use typed jobs")
+	}
+	if !strings.Contains(files["jobs.go"], "jobs.ScheduleOnce") {
+		t.Fatal("generated job boundary does not use safe one-shot scheduling")
+	}
+	if !strings.Contains(files["features/items/feature.go"], "helpers.SectionRenderer[*ItemsSectionRenderer]") {
+		t.Fatal("generated feature does not wire its generated section renderer")
 	}
 }
 
