@@ -51,6 +51,40 @@ func TestNewRootExecutesChildCommand(t *testing.T) {
 	}
 }
 
+func TestRootCompositionRejectsMissingCommands(t *testing.T) {
+	if err := Execute(nil); err == nil {
+		t.Fatal("Execute(nil) reported success")
+	}
+
+	t.Run("root use", func(t *testing.T) {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("NewRoot accepted an empty Use")
+			}
+		}()
+		NewRoot(RootOptions{})
+	})
+
+	t.Run("child command", func(t *testing.T) {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("NewRoot skipped a nil child")
+			}
+		}()
+		NewRoot(RootOptions{Use: "pk", Commands: []*cobra.Command{nil}})
+	})
+
+	t.Run("hidden flag command", func(t *testing.T) {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("AddHiddenBoolFlag accepted a nil command")
+			}
+		}()
+		var target bool
+		AddHiddenBoolFlag(nil, &target, "hidden", false, "hidden")
+	})
+}
+
 func TestWriteJSONUsesCommandWriter(t *testing.T) {
 	var out bytes.Buffer
 	cmd := &cobra.Command{}

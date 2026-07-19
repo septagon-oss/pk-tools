@@ -28,7 +28,6 @@ func TestGenerateModuleRejectsInvalidOptions(t *testing.T) {
 		{name: "missing description", opts: ModuleOptions{Name: "billing_management"}, want: "description is required"},
 		{name: "unknown archetype", opts: ModuleOptions{Name: "billing_management", Description: "Billing", Archetype: "legacy"}, want: "archetype"},
 		{name: "duplicate feature", opts: ModuleOptions{Name: "billing_management", Description: "Billing", Features: []string{"invoices", "invoices"}}, want: "duplicate feature"},
-		{name: "unsafe event", opts: ModuleOptions{Name: "billing_management", Description: "Billing", Events: []string{"invoice;drop"}}, want: "dot-separated"},
 		{name: "invalid port", opts: ModuleOptions{Name: "billing_management", Description: "Billing", Ports: []string{"audit.Service"}}, want: "exported Go identifier"},
 	}
 

@@ -247,6 +247,7 @@ func TestGenerateModule(t *testing.T) {
 		}
 	}
 	for _, retired := range []string{
+		"contracts/events.go",
 		"contracts/providers.go",
 		"contracts/routes.go",
 		"events.go",
@@ -323,103 +324,10 @@ func TestGenerateModuleAppliesImportProfile(t *testing.T) {
 	}
 }
 
-func TestGenerateModuleEmitsTypedEventContracts(t *testing.T) {
-	result := mustGenerateModule(t, ModuleOptions{
-		Name:        "stock_exchange_management",
-		Description: "Market data and investment workflows",
-		Category:    "finance",
-		Archetype:   "service",
-		Events: []string{
-			"stock_exchange.order.executed",
-			"stock_exchange.quote.updated",
-		},
-	})
-
-	files := make(map[string]string, len(result.Files))
-	for _, file := range result.Files {
-		files[file.Path] = file.Content
-	}
-
-	events, ok := files["events.go"]
-	if !ok {
-		t.Fatal("scaffold did not produce events.go")
-	}
-	contracts, ok := files["contracts/events.go"]
-	if !ok {
-		t.Fatal("event-bearing scaffold did not produce contracts/events.go")
-	}
-	manifest, ok := files["module.manifest.yaml"]
-	if !ok {
-		t.Fatal("scaffold did not produce module.manifest.yaml")
-	}
-
-	for _, needle := range []string{
-		"standard.WithEventContract(contracts.StockExchangeOrderExecuted.Contract())",
-		"standard.WithEventContract(contracts.StockExchangeQuoteUpdated.Contract())",
-	} {
-		if !strings.Contains(events, needle) {
-			t.Fatalf("events.go missing typed contract wiring %q", needle)
-		}
-	}
-	if strings.Contains(events, "standard.WithEvent(") {
-		t.Fatal("events.go still uses the legacy event map option")
-	}
-
-	for _, needle := range []string{
-		"type StockExchangeOrderExecutedPayload struct",
-		"var StockExchangeOrderExecuted = port.Event[StockExchangeOrderExecutedPayload]{",
-		"Durability: port.EventDurabilityDurable",
-		"type StockExchangeQuoteUpdatedPayload struct",
-	} {
-		if !strings.Contains(contracts, needle) {
-			t.Fatalf("contracts/events.go missing %q", needle)
-		}
-	}
-	for _, needle := range []string{
-		"name: stock_exchange.order.executed",
-		"name: stock_exchange.quote.updated",
-		"durability: durable",
-	} {
-		if !strings.Contains(manifest, needle) {
-			t.Fatalf("module.manifest.yaml missing %q", needle)
-		}
-	}
-
-	if !strings.Contains(files["README.md"], "standard.WithEventContract") {
-		t.Fatal("README.md does not document typed event declarations")
-	}
-}
-
-func TestGenerateModuleEventIdentifiersAvoidSuffixCollisions(t *testing.T) {
-	result := mustGenerateModule(t, ModuleOptions{
-		Name:        "events_management",
-		Description: "Event identifier collision coverage",
-		Events:      []string{"events.foo_bar", "events.foo.bar", "events.foo_bar2"},
-		Archetype:   "service",
-	})
-
-	files := make(map[string]string, len(result.Files))
-	for _, file := range result.Files {
-		files[file.Path] = file.Content
-	}
-	events := files["events.go"]
-	contracts := files["contracts/events.go"]
-
-	for _, identifier := range []string{"EventsFooBar", "EventsFooBar2", "EventsFooBar3"} {
-		if !strings.Contains(events, "contracts."+identifier+".Contract()") {
-			t.Fatalf("events.go missing unique identifier %q:\n%s", identifier, events)
-		}
-		if !strings.Contains(contracts, "var "+identifier+" = port.Event[") {
-			t.Fatalf("contracts/events.go missing unique declaration %q:\n%s", identifier, contracts)
-		}
-	}
-}
-
 func TestGenerateModuleGoFilesParse(t *testing.T) {
 	result := mustGenerateModule(t, ModuleOptions{
 		Name:        "stock_exchange_management",
 		Description: "Stock exchange module",
-		Events:      []string{"stock_exchange.order_executed"},
 		Features:    []string{"orders"},
 		Archetype:   "service",
 	})

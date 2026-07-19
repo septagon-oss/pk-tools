@@ -70,7 +70,8 @@ func generateE2EFlowsCode(opts E2EFlowOptions) (string, error) {
 		)
 	}
 
-	return fmt.Sprintf(`//go:build e2e
+	return fmt.Sprintf(
+		`//go:build e2e
 
 package e2e
 

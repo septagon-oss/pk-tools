@@ -265,7 +265,6 @@ var %sE2E = config.NewEntityConfig(%q, config.EntityOptions{
 
 // generateMigrationCode generates SQL migration up and down files.
 func generateMigrationCode(_, tableName string, fields []Field) (string, string, error) {
-
 	// Up migration.
 	var up strings.Builder
 	up.WriteString("-- +goose Up\n")

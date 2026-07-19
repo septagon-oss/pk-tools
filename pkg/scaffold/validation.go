@@ -17,7 +17,6 @@ var (
 	fieldIdentifierPattern    = regexp.MustCompile(`^[a-z][A-Za-z0-9]*$`)
 	categoryPattern           = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 	tagPattern                = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
-	eventPattern              = regexp.MustCompile(`^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$`)
 )
 
 var reservedEntityFields = map[string]struct{}{
@@ -55,14 +54,6 @@ func validateModuleOptions(opts ModuleOptions) error {
 	if err := validateUniqueStrings("tag", opts.Tags, func(value string) error {
 		if !tagPattern.MatchString(value) {
 			return fmt.Errorf("tag %q must contain only lowercase letters, digits, dots, underscores, or hyphens", value)
-		}
-		return nil
-	}); err != nil {
-		return err
-	}
-	if err := validateUniqueStrings("event", opts.Events, func(value string) error {
-		if !eventPattern.MatchString(value) {
-			return fmt.Errorf("event %q must be a dot-separated lowercase identifier", value)
 		}
 		return nil
 	}); err != nil {

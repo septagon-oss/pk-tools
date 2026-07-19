@@ -70,7 +70,6 @@ func generateModuleFiles(opts ModuleOptions) []GeneratedFile {
 	archetype := opts.Archetype
 	features := opts.Features
 	tags := opts.Tags
-	events := opts.Events
 	ports := opts.Ports
 
 	pascalName := ToPascalCase(name)
@@ -83,14 +82,13 @@ func generateModuleFiles(opts ModuleOptions) []GeneratedFile {
 
 	moduleTags := normalizeModuleTags(name, category, tags)
 	moduleFeatures := normalizeFeatureNames(features)
-	moduleEvents := normalizeEventNames(events)
 	modulePorts := normalizePortNames(ports)
 
 	files := []GeneratedFile{
 		{Path: "module.go", Content: renderModuleGo(name, description, category, pascalName, moduleTags, archetype)},
 		{Path: "transactions.go", Content: renderModuleTransactionsGo(name)},
 		{Path: "jobs.go", Content: renderModuleJobsGo(name)},
-		{Path: "metadata.go", Content: renderModuleMetadataGo(name, moduleFeatures, len(moduleEvents) > 0)},
+		{Path: "metadata.go", Content: renderModuleMetadataGo(name, moduleFeatures)},
 		{Path: "dependencies.go", Content: renderModuleDependenciesGo(name, modulePorts)},
 		{Path: "invocations.go", Content: renderModuleInvocationsGo(name, pascalName)},
 		{Path: "surfaces.go", Content: renderModuleSurfacesGo(name, displayName, pascalName, resourceKebab)},
@@ -98,19 +96,12 @@ func generateModuleFiles(opts ModuleOptions) []GeneratedFile {
 		{Path: "entity_permissions.go", Content: renderModuleEntityPermissionsGo(name)},
 		{Path: "README.md", Content: renderModuleReadme(name, description, category, archetype, moduleTags, moduleFeatures)},
 		{Path: "module_smoke_test.go", Content: renderModuleSmokeTestGo(name)},
-		{Path: "module.manifest.yaml", Content: renderModuleManifestYAML(name, description, category, resourceName, moduleTags, moduleFeatures, moduleEvents, modulePorts)},
+		{Path: "module.manifest.yaml", Content: renderModuleManifestYAML(name, description, category, resourceName, moduleTags, moduleFeatures, modulePorts)},
 		{Path: "module.skills.yaml", Content: renderModuleSkillsYAML(name, description, moduleTags)},
 		{Path: "contracts/module.go", Content: renderModuleContractsGo(name, description, category, moduleTags)},
 		{Path: "contracts/permissions.go", Content: renderModulePermissionsGo(name, pascalName)},
 		{Path: "contracts/provides/doc.go", Content: renderProvidesDocGo(name)},
 	}
-	if len(moduleEvents) > 0 {
-		files = append(files,
-			GeneratedFile{Path: "events.go", Content: renderModuleEventsGo(name, moduleEvents)},
-			GeneratedFile{Path: "contracts/events.go", Content: renderModuleEventContractsGo(moduleEvents)},
-		)
-	}
-
 	if archetype != "infrastructure" {
 		files = append(files, GeneratedFile{
 			Path:    "features/README.md",
@@ -124,7 +115,8 @@ func generateModuleFiles(opts ModuleOptions) []GeneratedFile {
 
 	for _, featureName := range moduleFeatures {
 		featureFiles := generateFeatureFiles(name, featureName, nil)
-		featureFiles = append(featureFiles,
+		featureFiles = append(
+			featureFiles,
 			GeneratedFile{Path: "feature_test.go", Content: generateFeatureTestCode(name, featureName)},
 			GeneratedFile{Path: "e2e.go", Content: generateFeatureE2ECode(name, featureName)},
 		)
@@ -259,87 +251,6 @@ func normalizeFeatureNames(features []string) []string {
 	}
 	sort.Strings(out)
 	return out
-}
-
-// normalizeEventNames trims and dedupes event names. Event names are
-// dot-separated tokens like "spatial.asset.uploaded".
-func normalizeEventNames(events []string) []string {
-	seen := make(map[string]struct{}, len(events))
-	out := make([]string, 0, len(events))
-	for _, evt := range events {
-		evt = strings.TrimSpace(evt)
-		if evt == "" {
-			continue
-		}
-		if _, ok := seen[evt]; ok {
-			continue
-		}
-		seen[evt] = struct{}{}
-		out = append(out, evt)
-	}
-	sort.Strings(out)
-	return out
-}
-
-// eventIdentifier turns a dotted event name into a stable Go identifier for
-// the generated typed contract and payload. Separators are intentionally
-// collapsed because event names are transport identifiers, not Go names.
-func eventIdentifier(eventName string) string {
-	parts := strings.FieldsFunc(eventName, func(r rune) bool {
-		return r == '.' || r == '-' || r == '_' || r == '/'
-	})
-	var b strings.Builder
-	for _, part := range parts {
-		b.WriteString(ToPascalCase(part))
-	}
-	name := b.String()
-	if name == "" {
-		return "DeclaredEvent"
-	}
-	if name[0] >= '0' && name[0] <= '9' {
-		return "Event" + name
-	}
-	return name
-}
-
-// uniqueEventIdentifiers allocates deterministic, package-safe identifiers
-// for a normalized event list. It considers the complete set, so a natural
-// name such as FooBar2 cannot collide with a generated suffix for FooBar.
-func uniqueEventIdentifiers(events []string) []string {
-	baseNames := make([]string, len(events))
-	baseCounts := make(map[string]int, len(events))
-	for i, eventName := range events {
-		baseNames[i] = eventIdentifier(eventName)
-		baseCounts[baseNames[i]]++
-	}
-	reservedBases := make(map[string]struct{}, len(baseCounts))
-	for base := range baseCounts {
-		reservedBases[base] = struct{}{}
-	}
-
-	used := make(map[string]struct{}, len(events))
-	identifiers := make([]string, len(events))
-	for i, base := range baseNames {
-		if _, exists := used[base]; !exists {
-			used[base] = struct{}{}
-			identifiers[i] = base
-			continue
-		}
-
-		for suffix := 2; ; suffix++ {
-			candidate := fmt.Sprintf("%s%d", base, suffix)
-			if _, exists := used[candidate]; exists {
-				continue
-			}
-			if _, reserved := reservedBases[candidate]; reserved {
-				continue
-			}
-			used[candidate] = struct{}{}
-			identifiers[i] = candidate
-			break
-		}
-	}
-	return identifiers
 }
 
 // normalizePortNames trims and dedupes port interface names. Names are
@@ -489,7 +400,7 @@ var (
 `, name, header, joinImports(imports), name, description, moduleResourceName(name), category, tagLiterals, pascalName, pascalName, pascalName, migrationsBlock, pascalName, pascalName, pascalName, name, name)
 }
 
-func renderModuleMetadataGo(name string, features []string, hasEvents bool) string {
+func renderModuleMetadataGo(name string, features []string) string {
 	imports := []string{
 		`"example.com/platformkit/backend-kit/app/module"`,
 		`"example.com/platformkit/backend-kit/app/module/providers/standard"`,
@@ -522,11 +433,6 @@ func renderModuleMetadataGo(name string, features []string, hasEvents bool) stri
 	}
 
 	header := filePurposeHeader("metadata.go", "module metadata projection and composer options", "ADR-0017")
-	eventBlock := ""
-	if hasEvents {
-		eventBlock = "\toptions = append(options, moduleEventOptions()...)\n"
-	}
-
 	return fmt.Sprintf(`package %s
 
 %s
@@ -551,9 +457,9 @@ func moduleComposerOptions() []standard.ComposerOption {
 	options := []standard.ComposerOption{
 %s	}
 	options = append(options, moduleDependencyOptions()...)
-%s	return options
+	return options
 }
-`, name, header, joinImports(imports), featureBlock, eventBlock)
+`, name, header, joinImports(imports), featureBlock)
 }
 
 func renderModuleDependenciesGo(name string, extraPorts []string) string {
@@ -595,71 +501,6 @@ func moduleDependencyOptions() []standard.ComposerOption {
 %s	}
 }
 `, name, header, portsImport, b.String())
-}
-
-func renderModuleEventsGo(name string, events []string) string {
-	header := filePurposeHeader("events.go", "declared event contracts emitted by this module", "ADR-0018")
-
-	var b strings.Builder
-	identifiers := uniqueEventIdentifiers(events)
-	for i := range events {
-		identifier := identifiers[i]
-		b.WriteString(fmt.Sprintf("\t\tstandard.WithEventContract(contracts.%s.Contract()),", identifier))
-		b.WriteString("\n")
-	}
-
-	return fmt.Sprintf(`package %s
-
-%s
-import (
-	"example.com/platformkit/backend-kit/app/module/providers/standard"
-	"example.com/platformkit/business-modules/%s/contracts"
-)
-
-// moduleEventOptions returns the typed event contracts this module emits.
-// Durable delivery is the default; the composer derives the required
-// transactional EventPublisher dependency from these declarations.
-func moduleEventOptions() []standard.ComposerOption {
-	return []standard.ComposerOption{
-%s	}
-}
-`, name, header, name, b.String())
-}
-
-func renderModuleEventContractsGo(events []string) string {
-	header := filePurposeHeader("events.go", "typed event contracts and starter payload schemas", "ADR-0018")
-	var b strings.Builder
-	identifiers := uniqueEventIdentifiers(events)
-	for i, evt := range events {
-		identifier := identifiers[i]
-		b.WriteString(fmt.Sprintf(`// %sPayload is the versioned wire payload for %s.
-// Replace the starter fields with the domain-specific contract before release.
-type %sPayload struct {
-	TenantID  string    `+"`json:\"tenantId\"`"+`
-	Timestamp time.Time `+"`json:\"timestamp\"`"+`
-}
-
-// %s is the canonical typed declaration for %s.
-var %s = port.Event[%sPayload]{
-	Name:       %q,
-	Version:    "1.0.0",
-	Doc:        %q,
-	Durability: port.EventDurabilityDurable,
-}
-
-`, identifier, evt, identifier, identifier, evt, identifier, identifier, evt, "Durable contract for "+evt+"."))
-	}
-
-	return fmt.Sprintf(`package contracts
-
-%s
-import (
-	"time"
-
-	"example.com/platformkit/ports/port"
-)
-
-%s`, header, b.String())
 }
 
 func renderModuleInvocationsGo(name, pascalName string) string {
@@ -1000,7 +841,7 @@ func renderModuleSkillsYAML(name, description string, tags []string) string {
 	return b.String()
 }
 
-func renderModuleManifestYAML(name, description, category, resourceName string, tags, features, events, ports []string) string {
+func renderModuleManifestYAML(name, description, category, resourceName string, tags, features, ports []string) string {
 	var b strings.Builder
 	b.WriteString("apiVersion: platformkit.dev/v1\n")
 	b.WriteString("kind: ModuleManifest\n")
@@ -1055,16 +896,7 @@ func renderModuleManifestYAML(name, description, category, resourceName string, 
 	} else {
 		b.WriteString("  features: []\n")
 	}
-	if len(events) > 0 {
-		b.WriteString("  events:\n")
-		for _, e := range events {
-			b.WriteString("    - name: " + e + "\n")
-			b.WriteString("      description: " + yamlString("Durable contract for "+e+".") + "\n")
-			b.WriteString("      durability: durable\n")
-		}
-	} else {
-		b.WriteString("  events: []\n")
-	}
+	b.WriteString("  events: []\n")
 	b.WriteString("  permissions:\n")
 	b.WriteString("    permissions:\n")
 	b.WriteString("      - token: " + name + ":read\n")
@@ -1076,13 +908,6 @@ func renderModuleManifestYAML(name, description, category, resourceName string, 
 	b.WriteString("      protectedPrefixes:\n")
 	b.WriteString("        - /api/v1/" + resourceName + "\n")
 	b.WriteString("      permissionTokenFormat: resource:action\n")
-	if len(events) > 0 {
-		b.WriteString("    events:\n")
-		b.WriteString("      emitted:\n")
-		for _, e := range events {
-			b.WriteString("        - " + e + "\n")
-		}
-	}
 	return b.String()
 }
 

@@ -51,7 +51,8 @@ func TestBuildProjectCompilesAgainstCurrentWorkspace(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	env := append(os.Environ(),
+	env := append(
+		os.Environ(),
 		"GOWORK=off",
 		"GOTOOLCHAIN=local",
 		"GOTMPDIR="+filepath.Join(workspaceRoot, ".tmp-go-tmp"),

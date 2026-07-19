@@ -45,7 +45,7 @@ func main() {
 
 - `pkg/cliapp` — root `*cobra.Command` assembly via `NewRoot`/`RootOptions`, `Execute`, argument helpers (`HasArg`, `ShowAllCommands`, `AddHiddenBoolFlag`), and JSON output helpers (`WriteJSON`, `SortedMapKeys`).
 - `pkg/tui` — terminal-aware `Renderer` with `Info`/`Success`/`Warn`/`Error` status lines, `Table` rendering, `CommandStart` banners, and a configurable `Palette` with `NO_COLOR`-aware color detection.
-- `pkg/scaffold` — **experimental** code generators (module, entity, feature, project). Not part of the supported v0.1.0 surface yet: the default import roots are placeholders pending a public-split rework. Use at your own risk.
+- `pkg/scaffold` — governed code generators for modules, entities, features, and projects. Callers provide an explicit import profile and dependency graph; the generator does not emit placeholder capabilities or infer event payload schemas.
 - `cmd/pk` — the `pk` developer CLI (`doctor`, `verify`, `explain modules`) built on these primitives.
 
 ## Verify

@@ -52,8 +52,7 @@ type ModuleOptions struct {
 	Archetype   string   `json:"archetype"`
 	Features    []string `json:"features"`
 	Tags        []string `json:"tags"`
-	Events      []string `json:"events"` // dot-separated event names emitted by this module
-	Ports       []string `json:"ports"`  // extra cross-module port interfaces this module depends on
+	Ports       []string `json:"ports"` // extra cross-module port interfaces this module depends on
 
 	ImportProfile ImportProfile `json:"-"`
 }
@@ -227,39 +226,54 @@ func WriteFiles(opts WriteOptions) error {
 			return fmt.Errorf("inspect output path %s: %w", fullPaths[i], statErr)
 		}
 	}
+	if opts.DryRun {
+		for i, f := range opts.Files {
+			if opts.Output != nil {
+				if _, err := fmt.Fprintf(opts.Output, "  [dry-run] %s (%d bytes)\n", fullPaths[i], len(f.Content)); err != nil {
+					return fmt.Errorf("write dry-run output for %s: %w", fullPaths[i], err)
+				}
+			}
+		}
+		return nil
+	}
+
+	if err := os.MkdirAll(basePath, 0o755); err != nil {
+		return fmt.Errorf("create base directory %s: %w", basePath, err)
+	}
+	if err := validateGeneratedBase(basePath); err != nil {
+		return err
+	}
+	root, err := os.OpenRoot(basePath)
+	if err != nil {
+		return fmt.Errorf("open generated output root %s: %w", basePath, err)
+	}
+	defer root.Close()
 
 	created := make([]string, 0, len(opts.Files))
 	for i, f := range opts.Files {
 		fullPath := fullPaths[i]
-		if opts.DryRun {
-			if opts.Output != nil {
-				if _, err := fmt.Fprintf(opts.Output, "  [dry-run] %s (%d bytes)\n", fullPath, len(f.Content)); err != nil {
-					return fmt.Errorf("write dry-run output for %s: %w", fullPath, err)
-				}
+		relativeDir := filepath.Dir(f.Path)
+		if relativeDir != "." {
+			if err := root.MkdirAll(relativeDir, 0o755); err != nil {
+				return rollbackGeneratedFiles(root, fmt.Errorf("create directory %s: %w", filepath.Dir(fullPath), err), created)
 			}
-			continue
 		}
 
-		dir := filepath.Dir(fullPath)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return rollbackGeneratedFiles(fmt.Errorf("create directory %s: %w", dir, err), created)
-		}
-
-		file, err := os.OpenFile(fullPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		file, err := root.OpenFile(f.Path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 		if err != nil {
-			return rollbackGeneratedFiles(fmt.Errorf("create file %s: %w", fullPath, err), created)
+			return rollbackGeneratedFiles(root, fmt.Errorf("create file %s: %w", fullPath, err), created)
 		}
-		created = append(created, fullPath)
+		created = append(created, f.Path)
 		if _, err := io.WriteString(file, f.Content); err != nil {
 			_ = file.Close()
-			return rollbackGeneratedFiles(fmt.Errorf("write file %s: %w", fullPath, err), created)
+			return rollbackGeneratedFiles(root, fmt.Errorf("write file %s: %w", fullPath, err), created)
 		}
 		if err := file.Close(); err != nil {
-			return rollbackGeneratedFiles(fmt.Errorf("close file %s: %w", fullPath, err), created)
+			return rollbackGeneratedFiles(root, fmt.Errorf("close file %s: %w", fullPath, err), created)
 		}
 		if opts.Output != nil {
 			if _, err := fmt.Fprintf(opts.Output, "  created %s\n", fullPath); err != nil {
-				return rollbackGeneratedFiles(fmt.Errorf("write output for %s: %w", fullPath, err), created)
+				return rollbackGeneratedFiles(root, fmt.Errorf("write output for %s: %w", fullPath, err), created)
 			}
 		}
 	}
@@ -323,10 +337,10 @@ func validateGeneratedParent(basePath, relativePath string) error {
 	return nil
 }
 
-func rollbackGeneratedFiles(cause error, paths []string) error {
+func rollbackGeneratedFiles(root *os.Root, cause error, paths []string) error {
 	errs := []error{cause}
 	for i := len(paths) - 1; i >= 0; i-- {
-		if err := os.Remove(paths[i]); err != nil && !os.IsNotExist(err) {
+		if err := root.Remove(paths[i]); err != nil && !os.IsNotExist(err) {
 			errs = append(errs, fmt.Errorf("roll back generated file %s: %w", paths[i], err))
 		}
 	}
