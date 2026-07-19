@@ -28,6 +28,12 @@ type E2EFlowResult struct {
 // suites expose Flows and use the shared e2eflow runner; init registration and
 // application-specific test harness imports are intentionally unsupported.
 func GenerateE2EFlow(opts E2EFlowOptions) (E2EFlowResult, error) {
+	return GenerateE2EFlowWithProfile(opts, ImportProfile{})
+}
+
+// GenerateE2EFlowWithProfile emits a flow suite using the supplied workspace
+// import roots.
+func GenerateE2EFlowWithProfile(opts E2EFlowOptions, profile ImportProfile) (E2EFlowResult, error) {
 	if strings.TrimSpace(opts.ModuleName) == "" {
 		return E2EFlowResult{}, fmt.Errorf("module name is required")
 	}
@@ -43,10 +49,10 @@ func GenerateE2EFlow(opts E2EFlowOptions) (E2EFlowResult, error) {
 		}
 	}
 
-	files := normalizeGeneratedGoFiles([]GeneratedFile{
+	files := applyImportProfileToFiles(normalizeGeneratedGoFiles([]GeneratedFile{
 		{Path: "flows.go", Content: generateE2EFlowsCode(opts)},
 		{Path: "flows_test.go", Content: generateE2EFlowsTestCode()},
-	})
+	}), profile)
 	return E2EFlowResult{
 		ModuleName: opts.ModuleName,
 		Feature:    opts.Feature,
@@ -75,7 +81,7 @@ func generateE2EFlowsCode(opts E2EFlowOptions) string {
 
 package e2e
 
-import "github.com/septagon-dev/platformkit-tests/flow"
+import "example.com/platformkit/tests/flow"
 
 // Flows returns the governed browser flows for %s.%s.
 func Flows() []flow.FlowSpec {
@@ -142,7 +148,7 @@ package e2e
 import (
 	"testing"
 
-	e2eflow "github.com/septagon-dev/platformkit-business-modules/tests/e2eflow"
+	e2eflow "example.com/platformkit/business-modules/tests/e2eflow"
 )
 
 func TestFlows(t *testing.T) {

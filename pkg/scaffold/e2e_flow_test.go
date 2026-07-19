@@ -32,7 +32,7 @@ func TestGenerateE2EFlowUsesModuleOwnedContract(t *testing.T) {
 	for _, want := range []string{
 		`func Flows() []flow.FlowSpec`,
 		`e2eflow.RunFlows(t, Flows())`,
-		`github.com/septagon-dev/platformkit-tests/flow`,
+		`example.com/platformkit/tests/flow`,
 		`Fulfills("REQ-004#AC-1")`,
 	} {
 		if !strings.Contains(all, want) {
@@ -65,5 +65,28 @@ func TestGenerateE2EFlowRejectsUnknownFieldType(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), `field "quantity"`) {
 		t.Fatalf("GenerateE2EFlow error = %v; want field context", err)
+	}
+}
+
+func TestGenerateE2EFlowAppliesWorkspaceProfile(t *testing.T) {
+	result, err := GenerateE2EFlowWithProfile(E2EFlowOptions{
+		ModuleName: "inventory_management",
+		Feature:    "catalog",
+		EntityName: "StockItem",
+	}, ImportProfile{
+		BusinessModules: "corp.example/business-modules",
+		Tests:           "corp.example/platform-tests",
+	})
+	if err != nil {
+		t.Fatalf("GenerateE2EFlowWithProfile: %v", err)
+	}
+	all := result.Files[0].Content + result.Files[1].Content
+	for _, want := range []string{"corp.example/business-modules/tests/e2eflow", "corp.example/platform-tests/flow"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("profiled E2E suite missing %q", want)
+		}
+	}
+	if strings.Contains(all, "example.com/platformkit/") {
+		t.Fatal("profiled E2E suite retained a neutral import root")
 	}
 }

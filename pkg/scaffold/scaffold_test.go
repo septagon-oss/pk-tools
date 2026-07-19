@@ -55,7 +55,7 @@ func TestResolveType(t *testing.T) {
 		numeric  bool
 	}{
 		{"string", "string", "varchar(255)", "VARCHAR(255)", false},
-		{"integer", "int64", "bigint", "INTEGER", true},
+		{"integer", "int64", "bigint", "BIGINT", true},
 		{"decimal", "float64", "decimal(10,2)", "DECIMAL(19,4)", true},
 		{"boolean", "bool", "boolean", "BOOLEAN DEFAULT false", false},
 		{"datetime", "time.Time", "timestamptz", "TIMESTAMPTZ", true},
