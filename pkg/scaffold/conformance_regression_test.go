@@ -50,6 +50,9 @@ func TestScaffoldedModuleIsBornConformant(t *testing.T) {
 		if strings.Contains(content, "WithCategorizedDep") {
 			t.Errorf("%s emits removed standard.WithCategorizedDep; use WithDep(RequiresPort[...])", path)
 		}
+		if strings.Contains(content, ":view") {
+			t.Errorf("%s emits retired permission verb view; use read", path)
+		}
 	}
 	if deps := get("dependencies.go"); !strings.Contains(deps, "standard.WithDep(module.RequiresPort[") {
 		t.Errorf("dependencies.go must use standard.WithDep(module.RequiresPort[...]); got:\n%s", deps)

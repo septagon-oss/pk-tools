@@ -854,7 +854,7 @@ var ModulePermissionTokens = authz.MustNormalizePermissionTokens([]string{
 	%q,
 	%q,
 })
-`, name, header, name+":view", name+":manage")
+`, name, header, name+":read", name+":manage")
 }
 
 func renderModuleEntityPermissionsGo(name string) string {
@@ -1028,7 +1028,7 @@ func ModulePermissions() []string {
 		Permission%sManage,
 	}
 }
-`, header, pascalName, name+":view", pascalName, name+":manage", pascalName, pascalName)
+`, header, pascalName, name+":read", pascalName, name+":manage", pascalName, pascalName)
 }
 
 func renderModuleRoutesGo(name string) string {
@@ -1160,7 +1160,7 @@ func renderModuleManifestYAML(name, description, category, resourceName string, 
 	}
 	b.WriteString("  permissions:\n")
 	b.WriteString("    permissions:\n")
-	b.WriteString("      - token: " + name + ":view\n")
+	b.WriteString("      - token: " + name + ":read\n")
 	b.WriteString("        description: Allow viewing " + resourceName + " resources.\n")
 	b.WriteString("      - token: " + name + ":manage\n")
 	b.WriteString("        description: Allow managing " + resourceName + " resources.\n")

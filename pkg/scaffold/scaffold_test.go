@@ -470,9 +470,13 @@ func TestGenerateEntity(t *testing.T) {
 		t.Errorf("EntityName = %q", result.EntityName)
 	}
 
-	// Should produce entity .go, _test.go, e2e.go.
+	// Entity files are colocated in one package and use an entity-specific E2E
+	// name, so multiple entities never overwrite or redeclare each other.
 	if len(result.Files) != 3 {
 		t.Errorf("got %d files, want 3", len(result.Files))
+	}
+	if result.Files[2].Path != "invoice_e2e.go" {
+		t.Errorf("entity E2E path = %q; want invoice_e2e.go", result.Files[2].Path)
 	}
 	if len(result.Migrations) != 2 {
 		t.Errorf("got %d migrations, want 2", len(result.Migrations))
@@ -487,6 +491,11 @@ func TestGenerateEntity(t *testing.T) {
 		t.Error("entity code should contain MCP methods")
 	}
 	e2eCode := result.Files[2].Content
+	for _, canonical := range []string{"package entities", "var InvoiceE2E ="} {
+		if !strings.Contains(e2eCode, canonical) {
+			t.Errorf("entity E2E config missing collision-free contract %q", canonical)
+		}
+	}
 	for _, retired := range []string{"DefaultCRUDCapabilities", "CRUDCapabilities:", "TableColumns: map[string]string"} {
 		if strings.Contains(e2eCode, retired) {
 			t.Errorf("entity E2E config contains retired contract %q", retired)

@@ -117,7 +117,7 @@ func GenerateEntityWithProfile(moduleName, entityName string, fields []Field, pr
 	files := applyImportProfileToFiles(normalizeGeneratedGoFiles([]GeneratedFile{
 		{Path: ToSnakeCase(entityName) + ".go", Content: code},
 		{Path: ToSnakeCase(entityName) + "_test.go", Content: testCode},
-		{Path: "e2e.go", Content: e2eCode},
+		{Path: ToSnakeCase(entityName) + "_e2e.go", Content: e2eCode},
 	}), profile)
 	migrations := applyImportProfileToFiles([]GeneratedFile{
 		{Path: fmt.Sprintf("migrations/001_create_%s.up.sql", ToSnakeCase(entityName)+"s"), Content: migUp},
@@ -156,50 +156,6 @@ func GenerateFeatureWithProfile(moduleName, featureName string, useCases []strin
 		ModuleName:  moduleName,
 		Files:       applyImportProfileToFiles(normalizeGeneratedGoFiles(files), profile),
 	}
-}
-
-// AddEntityToFeature creates entity files intended to be added to an existing feature.
-func AddEntityToFeature(moduleName, featureName, entityName string, fields []Field) (EntityResult, error) {
-	return AddEntityToFeatureWithProfile(moduleName, featureName, entityName, fields, ImportProfile{})
-}
-
-// AddEntityToFeatureWithProfile creates entity files for an existing feature
-// and rewrites generated imports using the supplied workspace profile.
-func AddEntityToFeatureWithProfile(moduleName, featureName, entityName string, fields []Field, profile ImportProfile) (EntityResult, error) {
-	code, err := generateEntityCode(moduleName, entityName, fields)
-	if err != nil {
-		return EntityResult{}, fmt.Errorf("generate entity %s for feature %s: %w", entityName, featureName, err)
-	}
-	testCode := generateEntityTestCode(moduleName, entityName, fields)
-	migUp, migDown, err := generateMigrationCode(moduleName, entityName, fields)
-	if err != nil {
-		return EntityResult{}, fmt.Errorf("generate entity %s migration for feature %s: %w", entityName, featureName, err)
-	}
-
-	registerSnippet := fmt.Sprintf(
-		`helpers.RegisterEntity[*entities.%s](b, helpers.EntityConfig{
-    Name:      %q,
-    EnableMCP: true,
-})`,
-		entityName, entityName,
-	)
-
-	files := applyImportProfileToFiles(normalizeGeneratedGoFiles([]GeneratedFile{
-		{Path: ToSnakeCase(entityName) + ".go", Content: code},
-		{Path: ToSnakeCase(entityName) + "_test.go", Content: testCode},
-	}), profile)
-	migrations := applyImportProfileToFiles([]GeneratedFile{
-		{Path: fmt.Sprintf("migrations/001_create_%s.up.sql", ToSnakeCase(entityName)+"s"), Content: migUp},
-		{Path: fmt.Sprintf("migrations/001_create_%s.down.sql", ToSnakeCase(entityName)+"s"), Content: migDown},
-	}, profile)
-
-	return EntityResult{
-		EntityName:      entityName,
-		ModuleName:      moduleName,
-		Files:           files,
-		Migrations:      migrations,
-		RegisterSnippet: applyImportProfile(registerSnippet, profile),
-	}, nil
 }
 
 // WriteFiles writes a slice of GeneratedFile to disk under the given base directory.

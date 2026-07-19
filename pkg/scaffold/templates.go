@@ -228,15 +228,15 @@ func generateEntityE2ECode(moduleName, entityName string, fields []Field) string
 	}
 
 	return fmt.Sprintf(
-		`package %s
+		`package entities
 
 import (
 	"example.com/platformkit/frontend-kit/e2e/config"
 )
 
-// E2E is the colocated E2E configuration for %s entity.
+// %sE2E is the colocated E2E configuration for %s entity.
 // Use this in flow definitions for selectors, routes, and capabilities.
-var E2E = config.NewEntityConfig(%q, config.EntityOptions{
+var %sE2E = config.NewEntityConfig(%q, config.EntityOptions{
 	ModuleName: %q,
 	BasePath:   %q,
 	FormFields: map[string]string{
@@ -250,8 +250,7 @@ var E2E = config.NewEntityConfig(%q, config.EntityOptions{
 		Delete: config.Capability{Provides: []string{%q}, Requires: []string{"authenticated_user"}},
 	},
 })
-	`, snakeName,
-		entityName,
+	`, entityName, entityName, entityName,
 		snakeName, moduleName, basePath,
 		formFields.String(),
 		requiredFields.String(),
@@ -383,7 +382,7 @@ func New%sFeature() module.Feature {
 
 	// Capabilities
 	b.Service("%sService", "1.0.0", "%s service", "Service").
-		Permissions("%s:view", "%s:manage")
+		Permissions("%s:read", "%s:manage")
 
 	return b.Build()
 }
