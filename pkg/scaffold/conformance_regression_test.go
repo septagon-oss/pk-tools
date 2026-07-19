@@ -1,3 +1,7 @@
+// Validates: REQ-002, REQ-016.
+// Per: ADR-0017 (composition through dependency injection), ADR-0029 (file purpose declaration).
+// Discipline: C-14.
+
 package scaffold
 
 import (
@@ -18,7 +22,14 @@ func TestScaffoldedModuleIsBornConformant(t *testing.T) {
 		name = "demo_widget_management"
 		desc = "Demo widgets: gizmos, gadgets, and their lifecycle"
 	)
-	result := GenerateModule(name, desc, "workspace", "service", []string{"widgets"}, []string{"workspace"})
+	result := GenerateModule(ModuleOptions{
+		Name:        name,
+		Description: desc,
+		Category:    "workspace",
+		Archetype:   "service",
+		Features:    []string{"widgets"},
+		Tags:        []string{"workspace"},
+	})
 
 	files := map[string]string{}
 	for _, f := range result.Files {
@@ -88,9 +99,9 @@ func TestScaffoldedModuleIsBornConformant(t *testing.T) {
 // descriptionLine returns the first top-level "  description: ..." line (2-space
 // indent = metadata block), trimmed.
 func descriptionLine(yaml string) string {
-	for _, line := range strings.Split(yaml, "\n") {
-		if strings.HasPrefix(line, "  description: ") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "  description: "))
+	for line := range strings.SplitSeq(yaml, "\n") {
+		if after, ok := strings.CutPrefix(line, "  description: "); ok {
+			return strings.TrimSpace(after)
 		}
 	}
 	return ""

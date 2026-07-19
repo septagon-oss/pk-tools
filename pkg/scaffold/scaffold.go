@@ -1,3 +1,7 @@
+// Implements: REQ-002.
+// Per: ADR-0029 (file purpose declaration).
+// Discipline: C-14.
+
 package scaffold
 
 import (
@@ -5,7 +9,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 // Field represents a field definition for entity scaffolding.
@@ -29,9 +32,7 @@ type ModuleResult struct {
 	RegistrationCode map[string]string `json:"registrationCode"`
 }
 
-// ModuleOptions carries the inputs for module scaffolding. It is the
-// canonical shape that drives template generation; the legacy positional
-// GenerateModule signature delegates here.
+// ModuleOptions is the canonical module-scaffolding input contract.
 type ModuleOptions struct {
 	Name        string   `json:"name"`
 	Description string   `json:"description"`
@@ -64,26 +65,11 @@ type FeatureResult struct {
 	Files       []GeneratedFile `json:"files"`
 }
 
-// GenerateModule creates a complete platformkit module with the standard
-// structure. This is the legacy positional signature; new callers should
-// use GenerateModuleWithOptions for tier, domain, events, ports, and
-// asset embedding support.
-func GenerateModule(name, description, category, archetype string, features, tags []string) ModuleResult {
-	return GenerateModuleWithOptions(ModuleOptions{
-		Name:        name,
-		Description: description,
-		Category:    category,
-		Archetype:   archetype,
-		Features:    features,
-		Tags:        tags,
-	})
-}
-
-// GenerateModuleWithOptions creates a complete platformkit module from a
+// GenerateModule creates a complete platformkit module from a
 // ModuleOptions specification. Defaults are applied for empty Category
 // and Archetype so the function is safe to call with a minimal options
 // struct.
-func GenerateModuleWithOptions(opts ModuleOptions) ModuleResult {
+func GenerateModule(opts ModuleOptions) ModuleResult {
 	if opts.Category == "" {
 		opts.Category = "business"
 	}
@@ -91,7 +77,7 @@ func GenerateModuleWithOptions(opts ModuleOptions) ModuleResult {
 		opts.Archetype = "service"
 	}
 
-	files := applyImportProfileToFiles(generateModuleFiles(opts), opts.ImportProfile)
+	files := applyImportProfileToFiles(normalizeGeneratedGoFiles(generateModuleFiles(opts)), opts.ImportProfile)
 	regCode := applyImportProfileToRegistrationCode(generateRegistrationCode(opts.Name), opts.ImportProfile)
 
 	return ModuleResult{
@@ -102,17 +88,23 @@ func GenerateModuleWithOptions(opts ModuleOptions) ModuleResult {
 }
 
 // GenerateEntity creates an entity with BaseEntity, MCP interfaces, tests, and migrations.
-func GenerateEntity(moduleName, entityName string, fields []Field) EntityResult {
+func GenerateEntity(moduleName, entityName string, fields []Field) (EntityResult, error) {
 	return GenerateEntityWithProfile(moduleName, entityName, fields, ImportProfile{})
 }
 
 // GenerateEntityWithProfile creates an entity and rewrites generated imports
 // using the supplied workspace profile.
-func GenerateEntityWithProfile(moduleName, entityName string, fields []Field, profile ImportProfile) EntityResult {
-	code := generateEntityCode(moduleName, entityName, fields)
+func GenerateEntityWithProfile(moduleName, entityName string, fields []Field, profile ImportProfile) (EntityResult, error) {
+	code, err := generateEntityCode(moduleName, entityName, fields)
+	if err != nil {
+		return EntityResult{}, fmt.Errorf("generate entity %s: %w", entityName, err)
+	}
 	testCode := generateEntityTestCode(moduleName, entityName, fields)
 	e2eCode := generateEntityE2ECode(moduleName, entityName, fields)
-	migUp, migDown := generateMigrationCode(moduleName, entityName, fields)
+	migUp, migDown, err := generateMigrationCode(moduleName, entityName, fields)
+	if err != nil {
+		return EntityResult{}, fmt.Errorf("generate entity %s migration: %w", entityName, err)
+	}
 
 	registerSnippet := fmt.Sprintf(
 		`helpers.RegisterEntity[*entities.%s](b, helpers.EntityConfig{
@@ -122,11 +114,11 @@ func GenerateEntityWithProfile(moduleName, entityName string, fields []Field, pr
 		entityName, entityName,
 	)
 
-	files := applyImportProfileToFiles([]GeneratedFile{
-		{Path: strings.ToLower(entityName) + ".go", Content: code},
-		{Path: strings.ToLower(entityName) + "_test.go", Content: testCode},
+	files := applyImportProfileToFiles(normalizeGeneratedGoFiles([]GeneratedFile{
+		{Path: ToSnakeCase(entityName) + ".go", Content: code},
+		{Path: ToSnakeCase(entityName) + "_test.go", Content: testCode},
 		{Path: "e2e.go", Content: e2eCode},
-	}, profile)
+	}), profile)
 	migrations := applyImportProfileToFiles([]GeneratedFile{
 		{Path: fmt.Sprintf("migrations/001_create_%s.up.sql", ToSnakeCase(entityName)+"s"), Content: migUp},
 		{Path: fmt.Sprintf("migrations/001_create_%s.down.sql", ToSnakeCase(entityName)+"s"), Content: migDown},
@@ -138,7 +130,7 @@ func GenerateEntityWithProfile(moduleName, entityName string, fields []Field, pr
 		Files:           files,
 		Migrations:      migrations,
 		RegisterSnippet: applyImportProfile(registerSnippet, profile),
-	}
+	}, nil
 }
 
 // GenerateFeature creates a feature with FeatureBuilder, handler, service, tests, and renderer.
@@ -162,21 +154,27 @@ func GenerateFeatureWithProfile(moduleName, featureName string, useCases []strin
 	return FeatureResult{
 		FeatureName: featureName,
 		ModuleName:  moduleName,
-		Files:       applyImportProfileToFiles(files, profile),
+		Files:       applyImportProfileToFiles(normalizeGeneratedGoFiles(files), profile),
 	}
 }
 
 // AddEntityToFeature creates entity files intended to be added to an existing feature.
-func AddEntityToFeature(moduleName, featureName, entityName string, fields []Field) EntityResult {
+func AddEntityToFeature(moduleName, featureName, entityName string, fields []Field) (EntityResult, error) {
 	return AddEntityToFeatureWithProfile(moduleName, featureName, entityName, fields, ImportProfile{})
 }
 
 // AddEntityToFeatureWithProfile creates entity files for an existing feature
 // and rewrites generated imports using the supplied workspace profile.
-func AddEntityToFeatureWithProfile(moduleName, featureName, entityName string, fields []Field, profile ImportProfile) EntityResult {
-	code := generateEntityCode(moduleName, entityName, fields)
+func AddEntityToFeatureWithProfile(moduleName, featureName, entityName string, fields []Field, profile ImportProfile) (EntityResult, error) {
+	code, err := generateEntityCode(moduleName, entityName, fields)
+	if err != nil {
+		return EntityResult{}, fmt.Errorf("generate entity %s for feature %s: %w", entityName, featureName, err)
+	}
 	testCode := generateEntityTestCode(moduleName, entityName, fields)
-	migUp, migDown := generateMigrationCode(moduleName, entityName, fields)
+	migUp, migDown, err := generateMigrationCode(moduleName, entityName, fields)
+	if err != nil {
+		return EntityResult{}, fmt.Errorf("generate entity %s migration for feature %s: %w", entityName, featureName, err)
+	}
 
 	registerSnippet := fmt.Sprintf(
 		`helpers.RegisterEntity[*entities.%s](b, helpers.EntityConfig{
@@ -186,10 +184,10 @@ func AddEntityToFeatureWithProfile(moduleName, featureName, entityName string, f
 		entityName, entityName,
 	)
 
-	files := applyImportProfileToFiles([]GeneratedFile{
-		{Path: strings.ToLower(entityName) + ".go", Content: code},
-		{Path: strings.ToLower(entityName) + "_test.go", Content: testCode},
-	}, profile)
+	files := applyImportProfileToFiles(normalizeGeneratedGoFiles([]GeneratedFile{
+		{Path: ToSnakeCase(entityName) + ".go", Content: code},
+		{Path: ToSnakeCase(entityName) + "_test.go", Content: testCode},
+	}), profile)
 	migrations := applyImportProfileToFiles([]GeneratedFile{
 		{Path: fmt.Sprintf("migrations/001_create_%s.up.sql", ToSnakeCase(entityName)+"s"), Content: migUp},
 		{Path: fmt.Sprintf("migrations/001_create_%s.down.sql", ToSnakeCase(entityName)+"s"), Content: migDown},
@@ -201,7 +199,7 @@ func AddEntityToFeatureWithProfile(moduleName, featureName, entityName string, f
 		Files:           files,
 		Migrations:      migrations,
 		RegisterSnippet: applyImportProfile(registerSnippet, profile),
-	}
+	}, nil
 }
 
 // WriteFiles writes a slice of GeneratedFile to disk under the given base directory.

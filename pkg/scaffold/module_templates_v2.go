@@ -1,7 +1,4 @@
-// module_templates_v2.go — module scaffold templates that produce the
-// canonical PlatformKit bootstrap (composer + runtime + manifest +
-// entity-permissions + headers).
-//
+// Implements: REQ-002, REQ-016.
 // Per: ADR-0017 (fx composition), ADR-0029 (file purpose declaration).
 // Discipline: C-14.
 
@@ -13,19 +10,17 @@ import (
 	"strings"
 )
 
-// filePurposeHeader emits the ADR-0029 leading comment block. It produces
-// canonical lines like:
+// filePurposeHeader emits the C-14 block that NormalizeGeneratedGoSource
+// moves ahead of the package clause. It produces canonical lines like:
 //
-//	// foo.go — short description.
-//	//
+//	// Implements: REQ-002.
 //	// Per: ADR-0017, ADR-0029.
 //	// Discipline: C-14.
 //
-// Refs are classified by their prefix (REQ-, ADR-, C-) and grouped into
-// the corresponding header line. A header always references at least one
-// of REQ/ADR/C — the linter (check-file-purpose) enforces this.
+// Refs are classified by prefix. REQ-002 is the default requirement because
+// every emitted source file is part of the scaffold contract.
 func filePurposeHeader(filename, description string, refs ...string) string {
-	var reqs, adrs, conventions []string
+	var reqs, adrs []string
 	for _, r := range refs {
 		r = strings.TrimSpace(r)
 		switch {
@@ -33,37 +28,36 @@ func filePurposeHeader(filename, description string, refs ...string) string {
 			reqs = append(reqs, r)
 		case strings.HasPrefix(r, "ADR-"):
 			adrs = append(adrs, r)
-		case strings.HasPrefix(r, "C-"):
-			conventions = append(conventions, r)
 		}
 	}
-	if len(conventions) == 0 {
-		// Every scaffolded file is part of the module discipline (C-14).
-		conventions = []string{"C-14"}
+	if len(reqs) == 0 {
+		reqs = []string{"REQ-002"}
 	}
 	if len(adrs) == 0 {
 		// At minimum, the file follows ADR-0029 (which created this header).
 		adrs = []string{"ADR-0029"}
 	}
 
+	verb := "Implements"
+	if strings.HasSuffix(filename, "_test.go") {
+		verb = "Validates"
+	}
+
 	var b strings.Builder
+	b.WriteString("// ")
+	b.WriteString(verb)
+	b.WriteString(": ")
+	b.WriteString(strings.Join(reqs, ", "))
+	b.WriteString(".\n")
+	b.WriteString("// Per: ")
+	b.WriteString(strings.Join(adrs, ", "))
+	b.WriteString(".\n")
+	b.WriteString("// Discipline: C-14.\n\n")
 	b.WriteString("// ")
 	b.WriteString(filename)
 	b.WriteString(" — ")
 	b.WriteString(description)
-	b.WriteString(".\n")
-	b.WriteString("//\n")
-	if len(reqs) > 0 {
-		b.WriteString("// Implements: ")
-		b.WriteString(strings.Join(reqs, ", "))
-		b.WriteString(".\n")
-	}
-	b.WriteString("// Per: ")
-	b.WriteString(strings.Join(adrs, ", "))
-	b.WriteString(".\n")
-	b.WriteString("// Discipline: ")
-	b.WriteString(strings.Join(conventions, ", "))
-	b.WriteString(".\n")
+	b.WriteString(".\n\n")
 	return b.String()
 }
 
@@ -433,6 +427,7 @@ func renderModuleGo(name, description, category, pascalName string, tags []strin
 	imports = append(imports, `"example.com/platformkit/backend-kit/app/module"`)
 	imports = append(imports, `"example.com/platformkit/backend-kit/app/module/providers/standard"`)
 	imports = append(imports, `"example.com/platformkit/business-modules/ports"`)
+	imports = append(imports, `portsurface "example.com/platformkit/ports/surface"`)
 	imports = append(imports, `"go.uber.org/fx"`)
 	if needsModuleMigrations(archetype) {
 		imports = append([]string{`"embed"`}, imports...)
@@ -505,7 +500,7 @@ var moduleRuntime = standard.NewRuntime(func() *%sModule {
 	// without a duplicate-provide error across registrar-less modules.
 	m.WithProviders(
 		fx.Annotate(
-			func() ports.ModuleSurfaceContribution { return moduleSurfaceContribution() },
+			func() portsurface.Contribution { return moduleSurfaceContribution() },
 			fx.ResultTags(`+"`"+`group:"module_surface_contributions"`+"`"+`),
 		),
 		fx.Annotate(
@@ -597,7 +592,7 @@ func renderModuleDependenciesGo(name string, extraPorts []string) string {
 	header := filePurposeHeader("dependencies.go", "cross-module dependency declarations via standard.WithDep + module.RequiresPort/OptionalPort", "ADR-0001", "ADR-0009", "ADR-0017")
 
 	// Modern wiring (ADR-0001 registrar finale): the admin surface is contributed
-	// declaratively via ModuleSurfaceContribution (surfaces.go / module.go) and
+	// declaratively via surface.Contribution (surfaces.go / module.go) and
 	// health via the "health_providers" fx group (invocations.go) — no
 	// Admin/Health/Settings registrar dependencies. Translation registration is
 	// still a typed port dependency on translation_management's provides surface.
@@ -731,7 +726,7 @@ import (
 
 func registerModuleInvocations(m *%sModule) {
 	// Modern wiring (ADR-0001 registrar finale): the admin surface is contributed
-	// via ModuleSurfaceContribution (surfaces.go / module.go), health via the
+	// via surface.Contribution (surfaces.go / module.go), health via the
 	// "health_providers" fx group, and translations via the translation
 	// registrar port — no legacy Admin/Settings registrar invocations.
 
@@ -771,6 +766,7 @@ func renderModuleSurfacesGo(name, displayName, pascalName, resourceKebab string)
 import (
 	contracts "example.com/platformkit/business-modules/%s/contracts"
 	"example.com/platformkit/business-modules/ports"
+	portsurface "example.com/platformkit/ports/surface"
 )
 
 // moduleSurfaceContribution registers this module's admin page. The route ID
@@ -778,20 +774,20 @@ import (
 // section renderers dispatching on that ID keep matching; PagePattern stays
 // Unknown because the scaffold ships no custom section renderer — the default
 // entity-table renderer handles any RegisterEntity surfaces.
-func moduleSurfaceContribution() ports.ModuleSurfaceContribution {
-	return ports.CanonicalizeAdminSurfaceContribution(ports.ModuleSurfaceContribution{
+func moduleSurfaceContribution() portsurface.Contribution {
+	return ports.CanonicalizeAdminSurfaceContribution(portsurface.Contribution{
 		ModuleID: ModuleName,
-		Routes: []ports.ModuleSurfaceRoute{
+		Routes: []portsurface.Route{
 			{
 				ID:             ModuleName,
 				Path:           "/admin/%s",
-				Title:          ports.SurfaceText{Fallback: %q},
-				NavLabel:       ports.SurfaceText{Fallback: %q},
+				Title:          portsurface.Text{Fallback: %q},
+				NavLabel:       portsurface.Text{Fallback: %q},
 				Icon:           "box",
 				Order:          100,
-				PagePattern:    ports.PagePatternHintUnknown,
+				PagePattern:    portsurface.PagePatternUnknown,
 				CapabilityTags: []string{contracts.Permission%sView},
-				Targets:        []ports.SurfaceTarget{ports.SurfaceTargetAdmin},
+				Targets:        []portsurface.Target{portsurface.TargetAdmin},
 			},
 		},
 	})
@@ -800,14 +796,14 @@ func moduleSurfaceContribution() ports.ModuleSurfaceContribution {
 // %sSurfaceContributionProvider is the modern typed surface provider (replaces
 // the legacy AdminRegistrar.RegisterProvider invocation).
 type %sSurfaceContributionProvider struct {
-	contribution ports.ModuleSurfaceContribution
+	contribution portsurface.Contribution
 }
 
 func New%sSurfaceContributionProvider() *%sSurfaceContributionProvider {
 	return &%sSurfaceContributionProvider{contribution: moduleSurfaceContribution()}
 }
 
-func (p *%sSurfaceContributionProvider) GetSurfaceContribution() ports.ModuleSurfaceContribution {
+func (p *%sSurfaceContributionProvider) GetSurfaceContribution() portsurface.Contribution {
 	return p.contribution
 }
 
@@ -1124,7 +1120,7 @@ func renderModuleManifestYAML(name, description, category, resourceName string, 
 	b.WriteString("    stateOwner: true\n")
 	b.WriteString("    requiredDepsFailFast: false\n")
 	// ADR-0001 registrar finale: the admin surface is contributed via
-	// ModuleSurfaceContribution and health via the "health_providers" fx group,
+	// surface.Contribution and health via the "health_providers" fx group,
 	// so they are not manifest dependencies. Translation registration remains a
 	// typed port dependency. (module-normalize regenerates this projection from
 	// the authored code; keep it consistent with dependencies.go.)

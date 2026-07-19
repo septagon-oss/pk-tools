@@ -5,13 +5,15 @@ package main
 // rather than forking subprocesses so they run quickly and deterministically
 // in CI.
 //
-// ADR: ADR-0029 (file purpose declaration).
-// Convention: C-14 (every Go file declares its purpose).
+// Validates: REQ-015.
+// Per: ADR-0029 (file purpose declaration).
+// Discipline: C-14.
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -40,6 +42,22 @@ func TestDoctorReportsCheckResults(t *testing.T) {
 	}
 	if !strings.Contains(got, "[FAIL] always-fail") {
 		t.Fatalf("missing FAIL line: %q", got)
+	}
+}
+
+func TestDoctorTreatsCheckErrorsAsFailures(t *testing.T) {
+	checks := []doctorCheck{
+		{Name: "errored", Run: func(ctx context.Context) (string, bool, error) {
+			return "unavailable", true, errors.New("probe failed")
+		}},
+	}
+	var out bytes.Buffer
+	err := runDoctorChecks(&out, context.Background(), checks)
+	if err == nil {
+		t.Fatal("expected an errored check to fail doctor")
+	}
+	if got := out.String(); !strings.Contains(got, "[FAIL] errored: unavailable (error: probe failed)") {
+		t.Fatalf("expected errored check to render as FAIL, got %q", got)
 	}
 }
 

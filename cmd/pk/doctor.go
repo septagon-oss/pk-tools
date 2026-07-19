@@ -4,8 +4,9 @@ package main
 // environment checks (Go version, sqlite driver availability, port 8080
 // availability, GOPATH writability) and prints a structured pass/fail report.
 //
-// ADR: ADR-0029 (file purpose declaration).
-// Convention: C-14 (every Go file declares its purpose).
+// Implements: REQ-015.
+// Per: ADR-0029 (file purpose declaration).
+// Discipline: C-14.
 
 import (
 	"context"
@@ -145,6 +146,9 @@ func runDoctorChecks(w io.Writer, ctx context.Context, checks []doctorCheck) err
 	allOK := true
 	for _, c := range checks {
 		status, ok, err := c.Run(ctx)
+		if err != nil {
+			ok = false
+		}
 		symbol := "OK"
 		if !ok {
 			symbol = "FAIL"

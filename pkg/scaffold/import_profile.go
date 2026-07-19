@@ -1,3 +1,7 @@
+// Implements: REQ-002.
+// Per: ADR-0029 (file purpose declaration).
+// Discipline: C-14.
+
 package scaffold
 
 import "strings"
@@ -7,6 +11,7 @@ const (
 	defaultBusinessModulesImportRoot  = "example.com/platformkit/business-modules"
 	defaultFrontendKitImportRoot      = "example.com/platformkit/frontend-kit"
 	defaultPortsImportRoot            = "example.com/platformkit/ports"
+	defaultTestsImportRoot            = "example.com/platformkit/tests"
 	defaultBackendKitReplacePath      = "../backend-kit"
 	defaultBusinessModulesReplacePath = "../business-modules"
 )
@@ -20,6 +25,7 @@ type ImportProfile struct {
 	BusinessModules            string `json:"businessModules,omitempty"`
 	FrontendKit                string `json:"frontendKit,omitempty"`
 	Ports                      string `json:"ports,omitempty"`
+	Tests                      string `json:"tests,omitempty"`
 	BackendKitReplacePath      string `json:"backendKitReplacePath,omitempty"`
 	BusinessModulesReplacePath string `json:"businessModulesReplacePath,omitempty"`
 }
@@ -32,6 +38,7 @@ func DefaultImportProfile() ImportProfile {
 		BusinessModules:            defaultBusinessModulesImportRoot,
 		FrontendKit:                defaultFrontendKitImportRoot,
 		Ports:                      defaultPortsImportRoot,
+		Tests:                      defaultTestsImportRoot,
 		BackendKitReplacePath:      defaultBackendKitReplacePath,
 		BusinessModulesReplacePath: defaultBusinessModulesReplacePath,
 	}
@@ -51,6 +58,9 @@ func (p ImportProfile) normalized() ImportProfile {
 	if strings.TrimSpace(p.Ports) == "" {
 		p.Ports = defaults.Ports
 	}
+	if strings.TrimSpace(p.Tests) == "" {
+		p.Tests = defaults.Tests
+	}
 	if strings.TrimSpace(p.BackendKitReplacePath) == "" {
 		p.BackendKitReplacePath = defaults.BackendKitReplacePath
 	}
@@ -67,6 +77,7 @@ func applyImportProfile(content string, profile ImportProfile) string {
 		defaultBusinessModulesImportRoot, profile.BusinessModules,
 		defaultFrontendKitImportRoot, profile.FrontendKit,
 		defaultPortsImportRoot, profile.Ports,
+		defaultTestsImportRoot, profile.Tests,
 		defaultBackendKitReplacePath, profile.BackendKitReplacePath,
 		defaultBusinessModulesReplacePath, profile.BusinessModulesReplacePath,
 	)

@@ -1,3 +1,9 @@
+// oss_boundary_test.go verifies that OSS scaffolds do not embed private import
+// roots.
+// Validates: REQ-002.
+// Per: ADR-0029 (file purpose declaration).
+// Discipline: C-14.
+
 package scaffold
 
 import (

@@ -1,3 +1,7 @@
+// Validates: REQ-002.
+// Per: ADR-0029 (file purpose declaration).
+// Discipline: C-14.
+
 package scaffold
 
 import (
@@ -31,7 +35,8 @@ func TestToSnakeCase(t *testing.T) {
 	}{
 		{"Invoice", "invoice"},
 		{"InvoiceItem", "invoice_item"},
-		{"APIKey", "a_p_i_key"},
+		{"APIKey", "api_key"},
+		{"HTTPServer", "http_server"},
 		{"", ""},
 	}
 	for _, tt := range tests {
@@ -41,60 +46,73 @@ func TestToSnakeCase(t *testing.T) {
 	}
 }
 
-func TestGoTypeFromString(t *testing.T) {
+func TestResolveType(t *testing.T) {
 	tests := []struct {
-		input string
-		want  string
+		input    string
+		wantGo   string
+		wantGORM string
+		wantSQL  string
+		numeric  bool
 	}{
-		{"string", "string"},
-		{"integer", "int64"},
-		{"int", "int64"},
-		{"decimal", "float64"},
-		{"boolean", "bool"},
-		{"datetime", "time.Time"},
-		{"uuid", "uuid.UUID"},
-		{"unknown", "string"},
+		{"string", "string", "varchar(255)", "VARCHAR(255)", false},
+		{"integer", "int64", "bigint", "INTEGER", true},
+		{"decimal", "float64", "decimal(10,2)", "DECIMAL(19,4)", true},
+		{"boolean", "bool", "boolean", "BOOLEAN DEFAULT false", false},
+		{"datetime", "time.Time", "timestamptz", "TIMESTAMPTZ", true},
+		{"uuid", "uuid.UUID", "uuid", "UUID", false},
 	}
 	for _, tt := range tests {
-		if got := GoTypeFromString(tt.input); got != tt.want {
-			t.Errorf("GoTypeFromString(%q) = %q, want %q", tt.input, got, tt.want)
+		got, err := ResolveType(tt.input)
+		if err != nil {
+			t.Fatalf("ResolveType(%q): %v", tt.input, err)
+		}
+		if got.GoType != tt.wantGo || got.GORMType != tt.wantGORM || got.SQLType != tt.wantSQL || got.IsNumeric != tt.numeric {
+			t.Errorf("ResolveType(%q) = %+v", tt.input, got)
 		}
 	}
 }
 
-func TestGORMTypeFromString(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"string", "varchar(255)"},
-		{"integer", "bigint"},
-		{"decimal", "decimal(10,2)"},
-		{"boolean", "boolean"},
-		{"text", "text"},
+func TestResolveTypeRejectsUnknownName(t *testing.T) {
+	if _, err := ResolveType("unknown"); err == nil {
+		t.Fatal("ResolveType(unknown) should fail")
+	} else if !strings.Contains(err.Error(), "registered types:") {
+		t.Fatalf("ResolveType(unknown) error = %q; want registered type inventory", err)
 	}
-	for _, tt := range tests {
-		if got := GORMTypeFromString(tt.input); got != tt.want {
-			t.Errorf("GORMTypeFromString(%q) = %q, want %q", tt.input, got, tt.want)
+}
+
+func TestResolveTypeRejectsRetiredAliases(t *testing.T) {
+	for _, alias := range []string{"int", "number", "float", "float64", "bool", "timestamp", "json"} {
+		if _, err := ResolveType(alias); err == nil {
+			t.Errorf("ResolveType(%q) accepted a retired alias", alias)
 		}
 	}
 }
 
-func TestSQLTypeFromString(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"string", "VARCHAR(255)"},
-		{"integer", "INTEGER"},
-		{"decimal", "DECIMAL(19,4)"},
-		{"uuid", "UUID"},
-		{"jsonb", "JSONB DEFAULT '{}'"},
+func TestJSONBTypeUsesNativeRepresentations(t *testing.T) {
+	info, err := ResolveType("jsonb")
+	if err != nil {
+		t.Fatalf("ResolveType(jsonb): %v", err)
 	}
-	for _, tt := range tests {
-		if got := SQLTypeFromString(tt.input); got != tt.want {
-			t.Errorf("SQLTypeFromString(%q) = %q, want %q", tt.input, got, tt.want)
-		}
+	if info.GoType != "json.RawMessage" || info.GORMType != "jsonb" || !strings.HasPrefix(info.SQLType, "JSONB") {
+		t.Fatalf("ResolveType(jsonb) = %+v; want native JSON representations", info)
+	}
+
+	result, err := GenerateEntity("content_management", "Document", []Field{{Name: "metadata", Type: "jsonb"}})
+	if err != nil {
+		t.Fatalf("GenerateEntity(jsonb): %v", err)
+	}
+	if !strings.Contains(result.Files[0].Content, `"encoding/json"`) || !strings.Contains(result.Files[0].Content, "Metadata json.RawMessage") {
+		t.Fatalf("generated JSONB entity does not use json.RawMessage:\n%s", result.Files[0].Content)
+	}
+}
+
+func TestRegisterTypeRejectsDuplicateOwnership(t *testing.T) {
+	info := TypeInfo{GoType: "money.Amount", GORMType: "numeric", SQLType: "NUMERIC"}
+	if err := RegisterType("money_test", info); err != nil {
+		t.Fatalf("RegisterType first registration: %v", err)
+	}
+	if err := RegisterType("money_test", info); err == nil {
+		t.Fatal("RegisterType duplicate should fail")
 	}
 }
 
@@ -106,7 +124,8 @@ func TestParseFieldSpec(t *testing.T) {
 	}{
 		{"amount:decimal", Field{Name: "amount", Type: "decimal"}, false},
 		{"status:string", Field{Name: "status", Type: "string"}, false},
-		{"name", Field{Name: "name", Type: "string"}, false},
+		{"name", Field{}, true},
+		{"name:", Field{}, true},
 		{":string", Field{}, true},
 		{"", Field{}, true},
 	}
@@ -154,8 +173,13 @@ func TestParseFieldSpecs(t *testing.T) {
 }
 
 func TestGenerateModule(t *testing.T) {
-	result := GenerateModule("billing_management", "Billing and subscriptions", "commerce", "service",
-		[]string{"subscriptions"}, nil)
+	result := GenerateModule(ModuleOptions{
+		Name:        "billing_management",
+		Description: "Billing and subscriptions",
+		Category:    "commerce",
+		Archetype:   "service",
+		Features:    []string{"subscriptions"},
+	})
 
 	if result.ModuleName != "billing_management" {
 		t.Errorf("ModuleName = %q", result.ModuleName)
@@ -226,7 +250,7 @@ func TestGenerateModuleAppliesImportProfile(t *testing.T) {
 		Ports:           "github.com/acme/platformkit-ports/port",
 	}
 
-	result := GenerateModuleWithOptions(ModuleOptions{
+	result := GenerateModule(ModuleOptions{
 		Name:          "billing_management",
 		Description:   "Billing and subscriptions",
 		Category:      "commerce",
@@ -235,9 +259,10 @@ func TestGenerateModuleAppliesImportProfile(t *testing.T) {
 		ImportProfile: profile,
 	})
 
-	combined := result.RegistrationCode["import"]
+	var combined strings.Builder
+	combined.WriteString(result.RegistrationCode["import"])
 	for _, file := range result.Files {
-		combined += "\n" + file.Content
+		combined.WriteString("\n" + file.Content)
 	}
 
 	for _, needle := range []string{
@@ -245,17 +270,17 @@ func TestGenerateModuleAppliesImportProfile(t *testing.T) {
 		"github.com/acme/platformkit-business-modules/billing_management/features/subscriptions",
 		"github.com/acme/platformkit-business-modules/billing_management",
 	} {
-		if !strings.Contains(combined, needle) {
+		if !strings.Contains(combined.String(), needle) {
 			t.Fatalf("profiled scaffold output missing %q", needle)
 		}
 	}
-	if strings.Contains(combined, "example.com/platformkit/") {
+	if strings.Contains(combined.String(), "example.com/platformkit/") {
 		t.Fatal("profiled scaffold output still contains neutral import roots")
 	}
 }
 
 func TestGenerateModuleEmitsTypedEventContracts(t *testing.T) {
-	result := GenerateModuleWithOptions(ModuleOptions{
+	result := GenerateModule(ModuleOptions{
 		Name:        "stock_exchange_management",
 		Description: "Market data and investment workflows",
 		Category:    "finance",
@@ -322,7 +347,7 @@ func TestGenerateModuleEmitsTypedEventContracts(t *testing.T) {
 }
 
 func TestGenerateModuleEventIdentifiersAvoidSuffixCollisions(t *testing.T) {
-	result := GenerateModuleWithOptions(ModuleOptions{
+	result := GenerateModule(ModuleOptions{
 		Name:      "events_management",
 		Events:    []string{"events.foo_bar", "events.foo-bar", "events.foo_bar2"},
 		Archetype: "service",
@@ -346,7 +371,7 @@ func TestGenerateModuleEventIdentifiersAvoidSuffixCollisions(t *testing.T) {
 }
 
 func TestGenerateModuleGoFilesParse(t *testing.T) {
-	result := GenerateModuleWithOptions(ModuleOptions{
+	result := GenerateModule(ModuleOptions{
 		Name:      "stock_exchange_management",
 		Events:    []string{"stock_exchange.order_executed"},
 		Features:  []string{"orders"},
@@ -364,7 +389,12 @@ func TestGenerateModuleGoFilesParse(t *testing.T) {
 }
 
 func TestGenerateModuleRegistryArchetypeOmitsMigrations(t *testing.T) {
-	result := GenerateModule("translation_management", "Translations", "localization", "registry", nil, nil)
+	result := GenerateModule(ModuleOptions{
+		Name:        "translation_management",
+		Description: "Translations",
+		Category:    "localization",
+		Archetype:   "registry",
+	})
 
 	fileNames := make(map[string]bool)
 	for _, f := range result.Files {
@@ -380,8 +410,13 @@ func TestGenerateModuleRegistryArchetypeOmitsMigrations(t *testing.T) {
 // + three-wrapper boilerplate. This is the tripwire that prevents the
 // scaffold from regressing to the old pattern as the framework evolves.
 func TestGenerateModuleUsesRuntimePattern(t *testing.T) {
-	result := GenerateModule("billing_management", "Billing and subscriptions", "commerce", "service",
-		[]string{"subscriptions"}, nil)
+	result := GenerateModule(ModuleOptions{
+		Name:        "billing_management",
+		Description: "Billing and subscriptions",
+		Category:    "commerce",
+		Archetype:   "service",
+		Features:    []string{"subscriptions"},
+	})
 
 	var moduleGo string
 	for _, f := range result.Files {
@@ -426,7 +461,10 @@ func TestGenerateEntity(t *testing.T) {
 		{Name: "amount", Type: "decimal", Description: "Invoice amount", Required: true},
 		{Name: "status", Type: "string", Description: "Invoice status"},
 	}
-	result := GenerateEntity("billing_management", "Invoice", fields)
+	result, err := GenerateEntity("billing_management", "Invoice", fields)
+	if err != nil {
+		t.Fatalf("GenerateEntity: %v", err)
+	}
 
 	if result.EntityName != "Invoice" {
 		t.Errorf("EntityName = %q", result.EntityName)
@@ -447,6 +485,17 @@ func TestGenerateEntity(t *testing.T) {
 	}
 	if !strings.Contains(entityCode, "MCPToolName") {
 		t.Error("entity code should contain MCP methods")
+	}
+	e2eCode := result.Files[2].Content
+	for _, retired := range []string{"DefaultCRUDCapabilities", "CRUDCapabilities:", "TableColumns: map[string]string"} {
+		if strings.Contains(e2eCode, retired) {
+			t.Errorf("entity E2E config contains retired contract %q", retired)
+		}
+	}
+	for _, canonical := range []string{"TableColumns:   []string", "Capabilities: config.CRUDCapabilities", `ModuleName: "billing_management"`} {
+		if !strings.Contains(e2eCode, canonical) {
+			t.Errorf("entity E2E config missing canonical contract %q", canonical)
+		}
 	}
 
 	// Migration should contain CREATE TABLE.
@@ -492,23 +541,99 @@ func TestGenerateFeature(t *testing.T) {
 				t.Error("service.go should contain ExportCSV use case")
 			}
 		}
+		if f.Path == "e2e.go" {
+			if strings.Contains(f.Content, "FlowCapability") || !strings.Contains(f.Content, "map[string]config.Capability") {
+				t.Error("e2e.go should use the canonical config.Capability contract")
+			}
+		}
+		if f.Path == "section_renderer.go" {
+			for _, canonical := range []string{"helpers.NewGenericCRUDSectionRenderer", "module.Renderable", "var _ module.SectionRenderer"} {
+				if !strings.Contains(f.Content, canonical) {
+					t.Errorf("section_renderer.go missing canonical contract %q", canonical)
+				}
+			}
+			for _, retired := range []string{"maragu.dev/gomponents", ") Node {"} {
+				if strings.Contains(f.Content, retired) {
+					t.Errorf("section_renderer.go contains retired contract %q", retired)
+				}
+			}
+		}
 	}
 }
 
-func TestIsNumericType(t *testing.T) {
-	if !IsNumericType("integer") {
-		t.Error("integer should be numeric")
+func TestGenerateEntityRejectsUnknownFieldType(t *testing.T) {
+	_, err := GenerateEntity("billing_management", "Invoice", []Field{{Name: "amount", Type: "currency_guess"}})
+	if err == nil {
+		t.Fatal("GenerateEntity should reject an unknown field type")
 	}
-	if !IsNumericType("decimal") {
-		t.Error("decimal should be numeric")
+	if !strings.Contains(err.Error(), `field "amount"`) || !strings.Contains(err.Error(), `"currency_guess"`) {
+		t.Fatalf("GenerateEntity error = %q; want field and type context", err)
 	}
-	if IsNumericType("string") {
-		t.Error("string should not be numeric")
+}
+
+func TestGenerateEntityUsesCanonicalAcronymFileNames(t *testing.T) {
+	result, err := GenerateEntity("auth_management", "APIKey", []Field{{Name: "name", Type: "string"}})
+	if err != nil {
+		t.Fatalf("GenerateEntity: %v", err)
+	}
+	if result.Files[0].Path != "api_key.go" || result.Files[1].Path != "api_key_test.go" {
+		t.Fatalf("GenerateEntity APIKey paths = %q, %q; want api_key.go, api_key_test.go", result.Files[0].Path, result.Files[1].Path)
+	}
+	if !strings.Contains(result.Files[0].Content, `return "api_keys"`) {
+		t.Fatalf("GenerateEntity APIKey table name is not canonical: %s", result.Files[0].Content)
+	}
+}
+
+func TestGeneratedGoFilesStartWithExactPurposeHeader(t *testing.T) {
+	moduleResult := GenerateModule(ModuleOptions{
+		Name:        "inventory_management",
+		Description: "Inventory",
+		Features:    []string{"items"},
+	})
+	entityResult, err := GenerateEntity("inventory_management", "Item", []Field{{Name: "name", Type: "string"}})
+	if err != nil {
+		t.Fatalf("GenerateEntity: %v", err)
+	}
+	featureResult := GenerateFeature("inventory_management", "items", []string{"ListItems"})
+
+	files := append([]GeneratedFile{}, moduleResult.Files...)
+	files = append(files, entityResult.Files...)
+	files = append(files, featureResult.Files...)
+	for _, file := range files {
+		if !strings.HasSuffix(file.Path, ".go") {
+			continue
+		}
+		lines := strings.Split(file.Content, "\n")
+		if len(lines) < 4 {
+			t.Fatalf("%s has no complete purpose header", file.Path)
+		}
+		verb := "// Implements: "
+		if strings.HasSuffix(file.Path, "_test.go") {
+			verb = "// Validates: "
+		}
+		if !strings.HasPrefix(lines[0], verb) {
+			t.Errorf("%s first line = %q; want prefix %q", file.Path, lines[0], verb)
+		}
+		if !strings.HasPrefix(lines[1], "// Per: ADR-") {
+			t.Errorf("%s second line = %q; want ADR reference", file.Path, lines[1])
+		}
+		if lines[2] != "// Discipline: C-14." {
+			t.Errorf("%s third line = %q; want exact C-14 discipline", file.Path, lines[2])
+		}
+		if lines[3] != "" {
+			t.Errorf("%s purpose header is not separated from source", file.Path)
+		}
+		if strings.Contains(file.Content, "%!") {
+			t.Errorf("%s contains an unresolved formatting directive", file.Path)
+		}
+		if _, err := parser.ParseFile(token.NewFileSet(), file.Path, file.Content, parser.AllErrors); err != nil {
+			t.Errorf("generated %s does not parse: %v", file.Path, err)
+		}
 	}
 }
 
 func TestGenerateModuleIncludesPlatformVerticalSliceBoundaries(t *testing.T) {
-	result := GenerateModuleWithOptions(ModuleOptions{
+	result := GenerateModule(ModuleOptions{
 		Name:        "inventory_management",
 		Description: "Inventory",
 		Features:    []string{"items"},
@@ -533,17 +658,5 @@ func TestGenerateModuleIncludesPlatformVerticalSliceBoundaries(t *testing.T) {
 	}
 	if !strings.Contains(files["features/items/feature.go"], "helpers.SectionRenderer[*ItemsSectionRenderer]") {
 		t.Fatal("generated feature does not wire its generated section renderer")
-	}
-}
-
-func TestTestValueForType(t *testing.T) {
-	if v := TestValueForType("string"); v != `"test-value"` {
-		t.Errorf("got %q", v)
-	}
-	if v := TestValueForType("integer"); v != "42" {
-		t.Errorf("got %q", v)
-	}
-	if v := TestValueForType("boolean"); v != "true" {
-		t.Errorf("got %q", v)
 	}
 }

@@ -1,3 +1,7 @@
+// Implements: REQ-002, REQ-016.
+// Per: ADR-0017 (composition through dependency injection), ADR-0029 (file purpose declaration).
+// Discipline: C-14.
+
 package scaffold
 
 import (
@@ -6,27 +10,35 @@ import (
 )
 
 // generateEntityCode generates the Go source for an entity.
-func generateEntityCode(moduleName, entityName string, fields []Field) string {
-	tableName := strings.ToLower(entityName) + "s"
+func generateEntityCode(moduleName, entityName string, fields []Field) (string, error) {
 	snakeName := ToSnakeCase(entityName)
+	tableName := snakeName + "s"
 
 	var fieldLines strings.Builder
 	var mcpQueryFields strings.Builder
 	mcpSemanticTags := []string{moduleName, snakeName}
+	needsJSONImport := false
 	needsTimeImport := false
 	needsUUIDImport := false
 
 	for _, f := range fields {
-		goType := GoTypeFromString(f.Type)
+		typeInfo, err := ResolveType(f.Type)
+		if err != nil {
+			return "", fmt.Errorf("field %q: %w", f.Name, err)
+		}
+		goType := typeInfo.GoType
+		if goType == "json.RawMessage" {
+			needsJSONImport = true
+		}
 		if goType == "time.Time" {
 			needsTimeImport = true
 		}
 		if goType == "uuid.UUID" {
 			needsUUIDImport = true
 		}
-		gormTag := fmt.Sprintf(`gorm:"type:%s"`, GORMTypeFromString(f.Type))
+		gormTag := fmt.Sprintf(`gorm:"type:%s"`, typeInfo.GORMType)
 		if f.Required {
-			gormTag = fmt.Sprintf(`gorm:"type:%s;not null"`, GORMTypeFromString(f.Type))
+			gormTag = fmt.Sprintf(`gorm:"type:%s;not null"`, typeInfo.GORMType)
 		}
 		jsonTag := fmt.Sprintf(`json:"%s"`, f.Name)
 		docTag := ""
@@ -38,7 +50,7 @@ func generateEntityCode(moduleName, entityName string, fields []Field) string {
 			ToPascalCase(f.Name), goType, gormTag, jsonTag, docTag)
 
 		operators := "mcp.DefaultMCPQueryOperators()"
-		if IsNumericType(f.Type) {
+		if typeInfo.IsNumeric {
 			operators = "mcp.NumericMCPQueryOperators()"
 		} else if f.Type == "string" || f.Type == "text" {
 			operators = "mcp.StringMCPQueryOperators()"
@@ -49,7 +61,10 @@ func generateEntityCode(moduleName, entityName string, fields []Field) string {
 
 	tagsStr := `"` + strings.Join(mcpSemanticTags, `", "`) + `"`
 
-	importLines := make([]string, 0, 5)
+	importLines := make([]string, 0, 6)
+	if needsJSONImport {
+		importLines = append(importLines, "\t\"encoding/json\"")
+	}
 	if needsTimeImport {
 		importLines = append(importLines, "\t\"time\"")
 	}
@@ -109,7 +124,7 @@ func (e *%s) MCPQueryFields() []mcp.MCPQueryField {
 		entityName, snakeName,
 		entityName, entityName, moduleName,
 		entityName, tagsStr,
-		entityName, mcpQueryFields.String())
+		entityName, mcpQueryFields.String()), nil
 }
 
 // generateEntityTestCode generates a test file for an entity.
@@ -200,7 +215,7 @@ func generateEntityE2ECode(moduleName, entityName string, fields []Field) string
 
 	var formFields strings.Builder
 	var requiredFields strings.Builder
-	var tableColumns strings.Builder
+	tableColumns := make([]string, 0, len(fields))
 	for _, f := range fields {
 		fmt.Fprintf(&formFields, "\t\t%q: %q,\n", f.Name, fmt.Sprintf(`input[name="%s"]`, f.Name))
 		if f.Required {
@@ -209,20 +224,11 @@ func generateEntityE2ECode(moduleName, entityName string, fields []Field) string
 			}
 			fmt.Fprintf(&requiredFields, "%q", f.Name)
 		}
-		fmt.Fprintf(&tableColumns, "\t\t%q: %q,\n", f.Name, fmt.Sprintf(`th[data-column="%s"], td[data-column="%s"]`, f.Name, f.Name))
-	}
-
-	featurePkg := snakeName
-	if strings.Contains(entityName, "_") {
-		featurePkg = strings.ToLower(entityName)
+		tableColumns = append(tableColumns, fmt.Sprintf("%q", f.Name))
 	}
 
 	return fmt.Sprintf(
 		`package %s
-
-// feature_test.go - feature contract tests.
-// Per: ADR-0017.
-// Discipline: C-14.
 
 import (
 	"example.com/platformkit/frontend-kit/e2e/config"
@@ -231,26 +237,34 @@ import (
 // E2E is the colocated E2E configuration for %s entity.
 // Use this in flow definitions for selectors, routes, and capabilities.
 var E2E = config.NewEntityConfig(%q, config.EntityOptions{
-	BasePath: %q,
+	ModuleName: %q,
+	BasePath:   %q,
 	FormFields: map[string]string{
 %s	},
 	RequiredFields: []string{%s},
-	TableColumns: map[string]string{
-%s	},
-	CRUDCapabilities: config.DefaultCRUDCapabilities(%q),
+	TableColumns:   []string{%s},
+	Capabilities: config.CRUDCapabilities{
+		Create: config.Capability{Provides: []string{%q}, Requires: []string{"authenticated_user"}},
+		Read:   config.Capability{Provides: []string{%q}, Requires: []string{"authenticated_user"}},
+		Update: config.Capability{Provides: []string{%q}, Requires: []string{"authenticated_user"}},
+		Delete: config.Capability{Provides: []string{%q}, Requires: []string{"authenticated_user"}},
+	},
 })
-`, featurePkg,
+	`, snakeName,
 		entityName,
-		snakeName, basePath,
+		snakeName, moduleName, basePath,
 		formFields.String(),
 		requiredFields.String(),
-		tableColumns.String(),
-		snakeName,
+		strings.Join(tableColumns, ", "),
+		snakeName+"_created",
+		snakeName+"_read",
+		snakeName+"_updated",
+		snakeName+"_deleted",
 	)
 }
 
 // generateMigrationCode generates SQL migration up and down files.
-func generateMigrationCode(_, entityName string, fields []Field) (string, string) {
+func generateMigrationCode(_, entityName string, fields []Field) (string, string, error) {
 	tableName := ToSnakeCase(entityName) + "s"
 
 	// Up migration.
@@ -269,7 +283,11 @@ func generateMigrationCode(_, entityName string, fields []Field) (string, string
 
 	var indexFields []string
 	for _, f := range fields {
-		sqlType := SQLTypeFromString(f.Type)
+		typeInfo, err := ResolveType(f.Type)
+		if err != nil {
+			return "", "", fmt.Errorf("field %q: %w", f.Name, err)
+		}
+		sqlType := typeInfo.SQLType
 		constraint := ""
 		if f.Required {
 			constraint = " NOT NULL"
@@ -316,7 +334,7 @@ func generateMigrationCode(_, entityName string, fields []Field) (string, string
 	fmt.Fprintf(&down, "DROP FUNCTION IF EXISTS update_%s_updated_at();\n", tableName)
 	fmt.Fprintf(&down, "DROP TABLE IF EXISTS %s;\n", tableName)
 
-	return upBuilder.String(), down.String()
+	return upBuilder.String(), down.String(), nil
 }
 
 // generateFeatureFiles generates the core feature files (feature.go, handler.go, service.go).
@@ -422,7 +440,8 @@ func (h *Handler) RegisterRoutes(api huma.API) {
 		contextImport = "\t\"context\"\n\n"
 	}
 
-	serviceGo := fmt.Sprintf(`package %s
+	var serviceGo strings.Builder
+	serviceGo.WriteString(fmt.Sprintf(`package %s
 
 // service.go - feature application service boundary.
 // Per: ADR-0007, ADR-0017.
@@ -441,25 +460,25 @@ type Service struct {
 func NewService(logger logger.Logger) *Service {
 	return &Service{logger: logger}
 }
-`, featureName, contextImport, featureName)
+`, featureName, contextImport, featureName))
 
 	// Add use case stubs.
 	for _, uc := range useCases {
 		ucPascal := ToPascalCase(uc)
-		serviceGo += fmt.Sprintf(`
+		serviceGo.WriteString(fmt.Sprintf(`
 // %s executes the %s use case.
 func (s *Service) %s(ctx context.Context) error {
-	s.logger.Info(ctx, "Executing %s", nil)
+	s.logger.Info(ctx, "Executing %s")
 	// IMPLEMENT: add business logic here
 	return nil
 }
-`, ucPascal, uc, ucPascal, uc)
+`, ucPascal, uc, ucPascal, uc))
 	}
 
 	return []GeneratedFile{
 		{Path: "feature.go", Content: featureGo},
 		{Path: "handler.go", Content: handlerGo},
-		{Path: "service.go", Content: serviceGo},
+		{Path: "service.go", Content: serviceGo.String()},
 	}
 }
 
@@ -523,10 +542,6 @@ func generateFeatureE2ECode(moduleName, featureName string) string {
 	return fmt.Sprintf(
 		`package %s
 
-// e2e.go - feature flow contract metadata.
-// Per: ADR-0017.
-// Discipline: C-14.
-
 import (
 	"example.com/platformkit/frontend-kit/e2e/config"
 )
@@ -544,7 +559,7 @@ var E2E = config.NewFeatureConfig(%q, config.FeatureOptions{
 	Routes: map[string]string{
 		"main": "/admin/%s/%s",
 	},
-	Capabilities: map[string]config.FlowCapability{
+	Capabilities: map[string]config.Capability{
 		"view": {
 			Provides: []string{"%s.%s.viewed"},
 			Requires: []string{"authenticated_user"},
@@ -569,70 +584,50 @@ func generateSectionRendererCode(moduleName, featureName string) string {
 	return fmt.Sprintf(
 		`package %s
 
-// section_renderer.go - admin surface renderer for the feature.
-// Per: ADR-0017.
-// Discipline: C-14.
-
 import (
 	"context"
 	"strings"
 
 	"example.com/platformkit/backend-kit/app/module"
-	. "maragu.dev/gomponents"
-	. "maragu.dev/gomponents/html"
+	"example.com/platformkit/backend-kit/app/module/helpers"
 )
 
 // %sSectionRenderer renders admin sections for the %s feature.
+// It delegates to GenericCRUDSectionRenderer for consistent Renderable output.
 type %sSectionRenderer struct {
-	*module.BaseSectionRenderer
+	inner *helpers.GenericCRUDSectionRenderer
 }
 
 // New%sSectionRenderer creates a new section renderer.
 func New%sSectionRenderer() *%sSectionRenderer {
 	return &%sSectionRenderer{
-		BaseSectionRenderer: module.NewBaseSectionRenderer([]string{
-			"%s-%s-list",
-			"%s-%s-detail",
-		}, 10),
+		inner: helpers.NewGenericCRUDSectionRenderer(helpers.CRUDRendererConfig{
+			ModuleName: %q,
+			EntityName: %q,
+			PluralName: %q,
+			BasePath:   "/api/v1/%s/%s",
+			AdminPath:  "/admin/%s/%s",
+			Columns:    nil, // CUSTOMIZE: add columns for your entity
+		}),
 	}
 }
 
 // CanRender implements module.SectionRenderer.
 func (r *%sSectionRenderer) CanRender(sectionID string) bool {
+	if r.inner.CanRender(sectionID) {
+		return true
+	}
 	return strings.HasPrefix(sectionID, "%s-%s")
 }
 
 // Render implements module.SectionRenderer.
-func (r *%sSectionRenderer) Render(ctx context.Context, sectionID string, requestPath string) Node {
-	switch {
-	case strings.HasSuffix(sectionID, "-list"):
-		return r.renderList(ctx, requestPath)
-	case strings.HasSuffix(sectionID, "-detail"):
-		return r.renderDetail(ctx, requestPath)
-	default:
-		return Div(Class("p-4"), P(Textf("%s: section %%s not implemented", sectionID)))
-	}
+func (r *%sSectionRenderer) Render(ctx context.Context, sectionID string, requestPath string) module.Renderable {
+	return r.inner.Render(ctx, sectionID, requestPath)
 }
 
-func (r *%sSectionRenderer) renderList(ctx context.Context, requestPath string) Node {
-	return Div(
-		Class("p-4"),
-		H2(Class("text-lg font-semibold mb-4"), Text("%s")),
-		Div(
-			Attr("hx-get", "/api/v1/%s/%s"),
-			Attr("hx-trigger", "load"),
-			Attr("hx-swap", "innerHTML"),
-			Text("Loading..."),
-		),
-	)
-}
-
-func (r *%sSectionRenderer) renderDetail(ctx context.Context, requestPath string) Node {
-	return Div(
-		Class("p-4"),
-		H2(Class("text-lg font-semibold mb-4"), Text("%s Detail")),
-		P(Text("Detail view placeholder")),
-	)
+// Priority implements module.SectionRenderer.
+func (r *%sSectionRenderer) Priority() int {
+	return r.inner.Priority()
 }
 
 var _ module.SectionRenderer = (*%sSectionRenderer)(nil)
@@ -641,13 +636,12 @@ var _ module.SectionRenderer = (*%sSectionRenderer)(nil)
 		pascalFeature,
 		pascalFeature, pascalFeature, pascalFeature,
 		pascalFeature,
-		sectionPrefix, featureName, sectionPrefix, featureName,
+		moduleName, featureName, pascalFeature,
+		moduleName, featureName,
+		strings.ReplaceAll(moduleName, "_", "-"), strings.ReplaceAll(featureName, "_", "-"),
 		pascalFeature, sectionPrefix, featureName,
 		pascalFeature,
 		pascalFeature,
-		pascalFeature, pascalFeature,
-		moduleName, featureName,
-		pascalFeature, pascalFeature,
 		pascalFeature,
 	)
 }
