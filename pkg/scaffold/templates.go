@@ -376,9 +376,6 @@ func New%sFeature() module.Feature {
 	// })
 
 %s
-	// Section renderer for the generated admin surface.
-	helpers.SectionRenderer[*%sSectionRenderer](b, New%sSectionRenderer)
-
 	// Capabilities
 	b.Service("%sService", "1.0.0", "%s service", "Service").
 		Permissions("%s:read", "%s:manage")
@@ -392,7 +389,6 @@ func New%sFeature() module.Feature {
 		pascalFeature, pascalModule,
 		moduleName, moduleName, featureName,
 		serviceProvider,
-		pascalFeature, pascalFeature,
 		pascalFeature, pascalFeature,
 		moduleName, moduleName,
 	)
@@ -538,76 +534,6 @@ var E2E = config.NewFeatureConfig(%q, config.FeatureOptions{
 		fmt.Sprintf(`[data-page="%s"] button[type="submit"]`, featureName),
 		strings.ReplaceAll(moduleName, "_", "-"), strings.ReplaceAll(featureName, "_", "-"),
 		moduleName, featureName,
-	)
-}
-
-// generateSectionRendererCode generates a section_renderer.go for a feature.
-func generateSectionRendererCode(moduleName, featureName string) string {
-	pascalFeature := ToPascalCase(featureName)
-	sectionPrefix := strings.ReplaceAll(moduleName, "_management", "")
-
-	return fmt.Sprintf(
-		`package %s
-
-import (
-	"context"
-	"strings"
-
-	"example.com/platformkit/backend-kit/app/module"
-	"example.com/platformkit/backend-kit/app/module/helpers"
-)
-
-// %sSectionRenderer renders admin sections for the %s feature.
-// It delegates to GenericCRUDSectionRenderer for consistent Renderable output.
-type %sSectionRenderer struct {
-	inner *helpers.GenericCRUDSectionRenderer
-}
-
-// New%sSectionRenderer creates a new section renderer.
-func New%sSectionRenderer() *%sSectionRenderer {
-	return &%sSectionRenderer{
-		inner: helpers.NewGenericCRUDSectionRenderer(helpers.CRUDRendererConfig{
-			ModuleName: %q,
-			EntityName: %q,
-			PluralName: %q,
-			BasePath:   "/api/v1/%s/%s",
-			AdminPath:  "/admin/%s/%s",
-			Columns:    nil, // CUSTOMIZE: add columns for your entity
-		}),
-	}
-}
-
-// CanRender implements module.SectionRenderer.
-func (r *%sSectionRenderer) CanRender(sectionID string) bool {
-	if r.inner.CanRender(sectionID) {
-		return true
-	}
-	return strings.HasPrefix(sectionID, "%s-%s")
-}
-
-// Render implements module.SectionRenderer.
-func (r *%sSectionRenderer) Render(ctx context.Context, sectionID string, requestPath string) module.Renderable {
-	return r.inner.Render(ctx, sectionID, requestPath)
-}
-
-// Priority implements module.SectionRenderer.
-func (r *%sSectionRenderer) Priority() int {
-	return r.inner.Priority()
-}
-
-var _ module.SectionRenderer = (*%sSectionRenderer)(nil)
-`, featureName,
-		pascalFeature, featureName,
-		pascalFeature,
-		pascalFeature, pascalFeature, pascalFeature,
-		pascalFeature,
-		moduleName, featureName, pascalFeature,
-		moduleName, featureName,
-		strings.ReplaceAll(moduleName, "_", "-"), strings.ReplaceAll(featureName, "_", "-"),
-		pascalFeature, sectionPrefix, featureName,
-		pascalFeature,
-		pascalFeature,
-		pascalFeature,
 	)
 }
 

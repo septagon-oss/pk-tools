@@ -52,9 +52,8 @@ type ModuleOptions struct {
 	Archetype   string   `json:"archetype"`
 	Features    []string `json:"features"`
 	Tags        []string `json:"tags"`
-	Events      []string `json:"events"`     // dot-separated event names emitted by this module
-	Ports       []string `json:"ports"`      // extra cross-module port interfaces this module depends on
-	WithAssets  bool     `json:"withAssets"` // emit assets_embed.go, assets_loader.go, and browser/ skeleton
+	Events      []string `json:"events"` // dot-separated event names emitted by this module
+	Ports       []string `json:"ports"`  // extra cross-module port interfaces this module depends on
 
 	ImportProfile ImportProfile `json:"-"`
 }
@@ -170,12 +169,10 @@ func GenerateFeature(opts FeatureOptions) (FeatureResult, error) {
 	files := generateFeatureFiles(opts.ModuleName, opts.Name, opts.UseCases)
 	testFile := generateFeatureTestCode(opts.ModuleName, opts.Name)
 	e2eFile := generateFeatureE2ECode(opts.ModuleName, opts.Name)
-	rendererFile := generateSectionRendererCode(opts.ModuleName, opts.Name)
 	files = append(
 		files,
 		GeneratedFile{Path: "feature_test.go", Content: testFile},
 		GeneratedFile{Path: "e2e.go", Content: e2eFile},
-		GeneratedFile{Path: "section_renderer.go", Content: rendererFile},
 	)
 	return FeatureResult{
 		FeatureName: opts.Name,
@@ -196,9 +193,13 @@ func WriteFiles(opts WriteOptions) error {
 	if err != nil {
 		return fmt.Errorf("resolve base directory %q: %w", opts.BaseDir, err)
 	}
+	if err := validateGeneratedBase(basePath); err != nil {
+		return err
+	}
 	fullPaths := make([]string, len(opts.Files))
 	seen := make(map[string]struct{}, len(opts.Files))
-	for i, f := range opts.Files {
+	generatedParents := make(map[string]struct{})
+	for _, f := range opts.Files {
 		if !filepath.IsLocal(f.Path) || filepath.Clean(f.Path) != f.Path || f.Path == "." {
 			return fmt.Errorf("generated file path %q must be a canonical relative path", f.Path)
 		}
@@ -206,12 +207,19 @@ func WriteFiles(opts WriteOptions) error {
 			return fmt.Errorf("duplicate generated file path %q", f.Path)
 		}
 		seen[f.Path] = struct{}{}
+		for parent := filepath.Dir(f.Path); parent != "."; parent = filepath.Dir(parent) {
+			generatedParents[parent] = struct{}{}
+		}
+	}
+	for path := range seen {
+		if _, conflict := generatedParents[path]; conflict {
+			return fmt.Errorf("generated path %q is both a file and a parent directory", path)
+		}
+	}
+	for i, f := range opts.Files {
 		fullPaths[i] = filepath.Join(basePath, f.Path)
 		if err := validateGeneratedParent(basePath, f.Path); err != nil {
 			return err
-		}
-		if opts.DryRun {
-			continue
 		}
 		if _, statErr := os.Lstat(fullPaths[i]); statErr == nil {
 			return fmt.Errorf("refusing to overwrite existing path %s", fullPaths[i])
@@ -258,6 +266,26 @@ func WriteFiles(opts WriteOptions) error {
 	return nil
 }
 
+func validateGeneratedBase(basePath string) error {
+	for current := basePath; ; current = filepath.Dir(current) {
+		info, err := os.Lstat(current)
+		if err == nil {
+			if info.Mode()&os.ModeSymlink != 0 {
+				return fmt.Errorf("generated output base component %s must not be a symbolic link", current)
+			}
+			if !info.IsDir() {
+				return fmt.Errorf("generated output base component %s is not a directory", current)
+			}
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("inspect generated output base component %s: %w", current, err)
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return nil
+		}
+	}
+}
+
 func validateGeneratedParent(basePath, relativePath string) error {
 	baseInfo, err := os.Lstat(basePath)
 	if err == nil {
@@ -276,7 +304,7 @@ func validateGeneratedParent(basePath, relativePath string) error {
 	if parent == "." {
 		return nil
 	}
-	for _, component := range strings.Split(parent, string(os.PathSeparator)) {
+	for component := range strings.SplitSeq(parent, string(os.PathSeparator)) {
 		current = filepath.Join(current, component)
 		info, err := os.Lstat(current)
 		if os.IsNotExist(err) {

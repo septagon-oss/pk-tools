@@ -588,7 +588,7 @@ func TestGenerateFeature(t *testing.T) {
 	for _, f := range result.Files {
 		fileNames[f.Path] = true
 	}
-	expected := []string{"feature.go", "service.go", "feature_test.go", "e2e.go", "section_renderer.go"}
+	expected := []string{"feature.go", "service.go", "feature_test.go", "e2e.go"}
 	for _, name := range expected {
 		if !fileNames[name] {
 			t.Errorf("missing %s", name)
@@ -596,6 +596,9 @@ func TestGenerateFeature(t *testing.T) {
 	}
 	if fileNames["handler.go"] {
 		t.Error("feature scaffold emitted an empty route registrar")
+	}
+	if fileNames["section_renderer.go"] {
+		t.Error("feature scaffold emitted an unconfigured section renderer")
 	}
 
 	// Service boundaries must fail explicitly until domain logic is supplied.
@@ -619,18 +622,6 @@ func TestGenerateFeature(t *testing.T) {
 		if f.Path == "e2e.go" {
 			if strings.Contains(f.Content, "FlowCapability") || !strings.Contains(f.Content, "map[string]config.Capability") {
 				t.Error("e2e.go should use the canonical config.Capability contract")
-			}
-		}
-		if f.Path == "section_renderer.go" {
-			for _, canonical := range []string{"helpers.NewGenericCRUDSectionRenderer", "module.Renderable", "var _ module.SectionRenderer"} {
-				if !strings.Contains(f.Content, canonical) {
-					t.Errorf("section_renderer.go missing canonical contract %q", canonical)
-				}
-			}
-			for _, retired := range []string{"maragu.dev/gomponents", ") Node {"} {
-				if strings.Contains(f.Content, retired) {
-					t.Errorf("section_renderer.go contains retired contract %q", retired)
-				}
 			}
 		}
 	}
@@ -755,7 +746,7 @@ func TestGenerateModuleIncludesPlatformVerticalSliceBoundaries(t *testing.T) {
 	if !strings.Contains(files["jobs.go"], "jobs.ScheduleOnce") {
 		t.Fatal("generated job boundary does not use safe one-shot scheduling")
 	}
-	if !strings.Contains(files["features/items/feature.go"], "helpers.SectionRenderer[*ItemsSectionRenderer]") {
-		t.Fatal("generated feature does not wire its generated section renderer")
+	if strings.Contains(files["features/items/feature.go"], "SectionRenderer") || files["features/items/section_renderer.go"] != "" {
+		t.Fatal("generated feature contains an unconfigured section renderer")
 	}
 }

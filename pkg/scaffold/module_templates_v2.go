@@ -122,26 +122,11 @@ func generateModuleFiles(opts ModuleOptions) []GeneratedFile {
 		files = append(files, GeneratedFile{Path: "migrations/README.md", Content: renderMigrationsReadme(name)})
 	}
 
-	if opts.WithAssets {
-		// Real placeholder files (not .gitkeep) so the //go:embed pattern
-		// in assets_embed.go has at least one matching file in each
-		// embedded directory. Operators replace these with real content.
-		files = append(
-			files,
-			GeneratedFile{Path: "assets_embed.go", Content: renderAssetsEmbedGo(name)},
-			GeneratedFile{Path: "assets_loader.go", Content: renderAssetsLoaderGo(name, pascalName)},
-			GeneratedFile{Path: "translations/en.json", Content: renderPlaceholderTranslation(name, description)},
-			GeneratedFile{Path: "design/tokens.json", Content: renderPlaceholderDesignTokens(name)},
-			GeneratedFile{Path: "browser/js/" + resourceName + "_viewer.js", Content: renderPlaceholderBrowserJS(name, resourceName)},
-		)
-	}
-
 	for _, featureName := range moduleFeatures {
 		featureFiles := generateFeatureFiles(name, featureName, nil)
 		featureFiles = append(featureFiles,
 			GeneratedFile{Path: "feature_test.go", Content: generateFeatureTestCode(name, featureName)},
 			GeneratedFile{Path: "e2e.go", Content: generateFeatureE2ECode(name, featureName)},
-			GeneratedFile{Path: "section_renderer.go", Content: generateSectionRendererCode(name, featureName)},
 		)
 		for _, file := range featureFiles {
 			files = append(files, GeneratedFile{
@@ -475,8 +460,7 @@ var moduleRuntime = standard.NewRuntime(func() *%sModule {
 	// lacks a matching gate (per ADR-0009).
 	m.WithProviders(EntityReadPermissionsProvider())
 
-	// Modern surface contribution (replaces legacy AdminRegistrar registration;
-	// ADR-0001 registrar finale). The fx-group value feeds the admin collector /
+	// Declarative surface contribution. The fx-group value feeds the admin collector /
 	// validators; the name-tagged typed provider supports interface discovery
 	// without a duplicate-provide error across registrar-less modules.
 	m.WithProviders(
@@ -575,11 +559,11 @@ func moduleComposerOptions() []standard.ComposerOption {
 func renderModuleDependenciesGo(name string, extraPorts []string) string {
 	header := filePurposeHeader("dependencies.go", "cross-module dependency declarations via standard.WithDep + module.RequiresPort/OptionalPort", "ADR-0001", "ADR-0009", "ADR-0017")
 
-	// Modern wiring (ADR-0001 registrar finale): the admin surface is contributed
+	// Canonical wiring: the admin surface is contributed
 	// declaratively via surface.Contribution (surfaces.go / module.go) and
-	// health via the "health_providers" fx group (invocations.go) — no
-	// Admin/Health/Settings registrar dependencies. Translation registration is
-	// still a typed port dependency on translation_management's provides surface.
+	// health via the "health_providers" fx group (invocations.go). Translation
+	// registration is a typed port dependency on translation_management's
+	// published contract.
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf(`		standard.WithDep(module.RequiresPort[translationprovides.TranslationRegistrar](module.PortSpec{Purpose: "Register %s translations", Category: module.DependencyCategoryInfrastructure, SubCategory: "i18n", PreferredProvider: "translation_management"})),`, moduleResourceName(name)))
 	b.WriteString("\n")
@@ -692,10 +676,10 @@ import (
 )
 
 func registerModuleInvocations(m *%sModule) {
-	// Modern wiring (ADR-0001 registrar finale): the admin surface is contributed
-	// via surface.Contribution (surfaces.go / module.go), health via the
-	// "health_providers" fx group, and translations via the translation
-	// registrar port — no legacy Admin/Settings registrar invocations.
+		// Canonical wiring: the admin surface is contributed
+		// via surface.Contribution (surfaces.go / module.go), health via the
+		// "health_providers" fx group, and translations via the translation
+		// registrar port.
 
 	// Health provider contributed into the "health_providers" fx group; the
 	// health_management module collects and registers it.
@@ -724,7 +708,7 @@ func registerModuleInvocations(m *%sModule) {
 }
 
 func renderModuleSurfacesGo(name, displayName, pascalName, resourceKebab string) string {
-	header := filePurposeHeader("surfaces.go", "declarative admin surface contribution (replaces the legacy AdminRegistrar registration path)", "ADR-0001", "ADR-0009", "ADR-0017")
+	header := filePurposeHeader("surfaces.go", "declarative admin surface contribution", "ADR-0001", "ADR-0009", "ADR-0017")
 
 	return fmt.Sprintf(
 		`package %s
@@ -737,10 +721,9 @@ import (
 )
 
 // moduleSurfaceContribution registers this module's admin page. The route ID
-// equals the module name (the un-prefixed legacy AdminPage ID convention) so
-// section renderers dispatching on that ID keep matching; PagePattern stays
-// Unknown because the scaffold ships no custom section renderer — the default
-// entity-table renderer handles any RegisterEntity surfaces.
+// equals the module name, which is also the canonical section-dispatch key.
+// PagePattern stays Unknown because the default entity-table renderer handles
+// RegisterEntity surfaces until the module supplies an intentional custom view.
 func moduleSurfaceContribution() portsurface.Contribution {
 	return ports.CanonicalizeAdminSurfaceContribution(portsurface.Contribution{
 		ModuleID: ModuleName,
@@ -760,8 +743,7 @@ func moduleSurfaceContribution() portsurface.Contribution {
 	})
 }
 
-// %sSurfaceContributionProvider is the modern typed surface provider (replaces
-// the legacy AdminRegistrar.RegisterProvider invocation).
+// %sSurfaceContributionProvider exposes the module's typed surface contribution.
 type %sSurfaceContributionProvider struct {
 	contribution portsurface.Contribution
 }
@@ -1119,107 +1101,19 @@ func yamlString(s string) string {
 	return s
 }
 
-func renderAssetsEmbedGo(name string) string {
-	header := filePurposeHeader("assets_embed.go", "browser asset embed for translations, design tokens, and JS controllers", "ADR-0024")
-
-	return fmt.Sprintf(`package %s
-
-%s
-import (
-	"embed"
-
-	"example.com/platformkit/business-modules/internal/moduleassets"
-)
-
-//go:embed translations/*.json design/tokens.json browser/js/*.js
-var moduleAssetFS embed.FS
-
-func init() {
-	moduleassets.MustRegisterBrowserAssets(ModuleName, moduleAssetFS)
-}
-`, name, header)
-}
-
-func renderAssetsLoaderGo(name, pascalName string) string {
-	header := filePurposeHeader("assets_loader.go", "loader exposing embedded translations and design tokens to the platform", "ADR-0024")
-
-	return fmt.Sprintf(`package %s
-
-%s
-import "example.com/platformkit/business-modules/internal/moduleassets"
-
-// AssetsLoader exposes translations and design tokens embedded in this
-// module to the platform's translation and design-token registrars.
-type AssetsLoader struct {
-	*moduleassets.EmbeddedLoader
-}
-
-func NewAssetsLoader() *AssetsLoader {
-	return &AssetsLoader{
-		EmbeddedLoader: moduleassets.NewEmbeddedLoader(moduleAssetFS),
-	}
-}
-
-func (l *AssetsLoader) LoadTranslation(locale string) (map[string]any, error) {
-	return l.LoadTranslationTree(locale)
-}
-
-func (l *AssetsLoader) LoadDesignTokens() ([]byte, error) {
-	return l.LoadDesignTokensJSON()
-}
-
-// Compile-time guard so the loader keeps satisfying its expected shape.
-var _ interface {
-	LoadTranslation(string) (map[string]any, error)
-	LoadDesignTokens() ([]byte, error)
-} = (*AssetsLoader)(nil)
-`, name, header)
-}
-
-func renderPlaceholderTranslation(name, description string) string {
-	return fmt.Sprintf(`{
-  "module": {
-    "name": %q,
-    "description": %q
-  }
-}
-`, moduleDisplayName(name), description)
-}
-
-func renderPlaceholderDesignTokens(name string) string {
-	return fmt.Sprintf(`{
-  "$schema": "https://platformkit.dev/schemas/design-tokens.json",
-  "module": %q,
-  "tokens": {}
-}
-`, name)
-}
-
-func renderPlaceholderBrowserJS(name, resourceName string) string {
-	return fmt.Sprintf(`// %s_viewer.js — placeholder browser controller for the %s module.
-//
-// Replace this stub with the real controller once you ship a feature that
-// owns browser behavior. The //go:embed pattern in assets_embed.go
-// requires at least one .js file under browser/js, so this stub exists
-// purely to make the module compile.
-(function () {
-  if (typeof window === "undefined") {
-    return;
-  }
-  window.%sViewer = window.%sViewer || {};
-})();
-`, resourceName, name, ToPascalCase(resourceName), ToPascalCase(resourceName))
-}
-
 func renderFeaturesReadme(name string) string {
 	return fmt.Sprintf(`# %s features
 
-Add one subdirectory per feature. Each feature should at minimum own:
+Add one subdirectory per feature. Every feature owns:
 
 - `+"`feature.go`"+`
-- `+"`handler.go`"+`
-- `+"`service.go`"+`
+- `+"`feature_test.go`"+`
 - `+"`e2e.go`"+`
+
+Generate `+"`service.go`"+` only when named use cases exist. Add a handler only
+with concrete endpoint definitions; feature.go remains the route metadata source
+of truth. Add a custom section renderer only with a complete, domain-specific
+view contract.
 
 Wire new feature constructors into `+"`metadata.go`"+` via `+"`standard.WithFeatures(...)`"+`.
 `, name)

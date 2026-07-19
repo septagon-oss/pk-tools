@@ -123,6 +123,7 @@ func TestBuildProjectRejectsUnsafeConfiguration(t *testing.T) {
 		{name: "application-owned infrastructure", mutate: func(cfg *ComposeConfig) { cfg.Modules = []string{"infrastructure"} }},
 		{name: "backend version", mutate: func(cfg *ComposeConfig) { cfg.Dependencies.BackendKit.Version = "" }},
 		{name: "version injection", mutate: func(cfg *ComposeConfig) { cfg.Dependencies.BusinessModules.Version = "v1.0.0\nreplace evil" }},
+		{name: "version path mismatch", mutate: func(cfg *ComposeConfig) { cfg.Dependencies.BusinessModules.Version = "v2.0.0" }},
 		{name: "replacement traversal", mutate: func(cfg *ComposeConfig) { cfg.Dependencies.BackendKit.ReplacePath = "../backend/../escape" }},
 		{name: "duplicate replacement", mutate: func(cfg *ComposeConfig) {
 			cfg.Dependencies.AdditionalReplacements = []GoModuleReplacement{{ModulePath: defaultBackendKitImportRoot, LocalPath: "../backend-copy"}}
@@ -234,7 +235,7 @@ func TestGenerateConfigYAML(t *testing.T) {
 func TestGenerateGoMod(t *testing.T) {
 	remote := ProjectDependencies{
 		BackendKit:      GoModuleSource{Version: "v1.2.3"},
-		BusinessModules: GoModuleSource{Version: "v2.3.4"},
+		BusinessModules: GoModuleSource{Version: "v1.3.4"},
 	}
 	result := generateGoMod("github.com/myorg/testapp", remote, ImportProfile{})
 

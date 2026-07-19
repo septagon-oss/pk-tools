@@ -5,11 +5,18 @@
 package scaffold
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+type failingProgressWriter struct{}
+
+func (failingProgressWriter) Write([]byte) (int, error) {
+	return 0, errors.New("progress unavailable")
+}
 
 func TestGenerateModuleRejectsInvalidOptions(t *testing.T) {
 	tests := []struct {
@@ -97,6 +104,9 @@ func TestWriteFilesConfinesPathsAndRefusesOverwrite(t *testing.T) {
 	if err := WriteFiles(WriteOptions{BaseDir: baseDir, Files: []GeneratedFile{{Path: "same.go"}, {Path: "same.go"}}, DryRun: true}); err == nil {
 		t.Fatal("WriteFiles accepted duplicate output paths")
 	}
+	if err := WriteFiles(WriteOptions{BaseDir: baseDir, Files: []GeneratedFile{{Path: "tree"}, {Path: "tree/child.go"}}, DryRun: true}); err == nil {
+		t.Fatal("WriteFiles accepted a file that is also an output parent")
+	}
 
 	existingPath := filepath.Join(baseDir, "existing.go")
 	if err := os.WriteFile(existingPath, []byte("owned"), 0o644); err != nil {
@@ -105,12 +115,25 @@ func TestWriteFilesConfinesPathsAndRefusesOverwrite(t *testing.T) {
 	if err := WriteFiles(WriteOptions{BaseDir: baseDir, Files: []GeneratedFile{{Path: "existing.go", Content: "replacement"}}}); err == nil {
 		t.Fatal("WriteFiles overwrote an existing file")
 	}
+	if err := WriteFiles(WriteOptions{BaseDir: baseDir, Files: []GeneratedFile{{Path: "existing.go", Content: "replacement"}}, DryRun: true}); err == nil {
+		t.Fatal("WriteFiles dry run ignored an existing file")
+	}
 	content, err := os.ReadFile(existingPath)
 	if err != nil {
 		t.Fatalf("read existing file: %v", err)
 	}
 	if string(content) != "owned" {
 		t.Fatalf("existing file changed to %q", content)
+	}
+	preflightPath := filepath.Join(baseDir, "preflight.go")
+	if err := WriteFiles(WriteOptions{BaseDir: baseDir, Files: []GeneratedFile{
+		{Path: "preflight.go", Content: "must not be written"},
+		{Path: "existing.go", Content: "replacement"},
+	}}); err == nil {
+		t.Fatal("WriteFiles accepted a set containing an existing target")
+	}
+	if _, err := os.Stat(preflightPath); !os.IsNotExist(err) {
+		t.Fatalf("WriteFiles left a partial preflight output: %v", err)
 	}
 
 	if err := WriteFiles(WriteOptions{BaseDir: baseDir, Files: []GeneratedFile{{Path: "nested/new.go", Content: "new"}}}); err != nil {
@@ -123,5 +146,36 @@ func TestWriteFilesConfinesPathsAndRefusesOverwrite(t *testing.T) {
 	}
 	if err := WriteFiles(WriteOptions{BaseDir: baseDir, Files: []GeneratedFile{{Path: "linked/escape.go", Content: "escape"}}}); err == nil {
 		t.Fatal("WriteFiles followed a symbolic-link output parent")
+	}
+
+	baseParent := t.TempDir()
+	outsideBase := t.TempDir()
+	linkedBase := filepath.Join(baseParent, "linked-base")
+	if err := os.Symlink(outsideBase, linkedBase); err != nil {
+		t.Fatalf("create base-parent symlink: %v", err)
+	}
+	if err := WriteFiles(WriteOptions{BaseDir: filepath.Join(linkedBase, "generated"), Files: []GeneratedFile{{Path: "escape.go", Content: "escape"}}}); err == nil {
+		t.Fatal("WriteFiles followed a symbolic-link base component")
+	}
+	if _, err := os.Stat(filepath.Join(outsideBase, "generated", "escape.go")); !os.IsNotExist(err) {
+		t.Fatalf("WriteFiles escaped through a base component: %v", err)
+	}
+
+	rollbackDir := t.TempDir()
+	rollbackPaths := []string{"first.go", "second.go"}
+	if err := WriteFiles(WriteOptions{
+		BaseDir: rollbackDir,
+		Files: []GeneratedFile{
+			{Path: rollbackPaths[0], Content: "first"},
+			{Path: rollbackPaths[1], Content: "second"},
+		},
+		Output: failingProgressWriter{},
+	}); err == nil {
+		t.Fatal("WriteFiles ignored progress failure")
+	}
+	for _, path := range rollbackPaths {
+		if _, err := os.Stat(filepath.Join(rollbackDir, path)); !os.IsNotExist(err) {
+			t.Fatalf("WriteFiles did not roll back %s: %v", path, err)
+		}
 	}
 }

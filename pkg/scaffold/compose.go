@@ -12,13 +12,13 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	modmodule "golang.org/x/mod/module"
 )
 
 var (
 	composeAppNamePattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9 _-]*[A-Za-z0-9])?$`)
 	composeModulePattern  = regexp.MustCompile(`^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$`)
-	composeModulePath     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._~+/-]*$`)
-	composeModuleVersion  = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9][A-Za-z0-9.-]*)?$`)
 )
 
 // GoModuleSource identifies one direct generated-project dependency. Version
@@ -182,8 +182,12 @@ func validateProjectDependencies(deps ProjectDependencies, profile ImportProfile
 		if err := validateGoModulePath(dependency.modulePath); err != nil {
 			return fmt.Errorf("%s module path: %w", dependency.name, err)
 		}
-		if !composeModuleVersion.MatchString(dependency.source.Version) {
+		canonicalVersion := modmodule.CanonicalVersion(dependency.source.Version)
+		if canonicalVersion == "" || canonicalVersion != dependency.source.Version {
 			return fmt.Errorf("%s version %q must be an explicit canonical Go module version", dependency.name, dependency.source.Version)
+		}
+		if err := modmodule.Check(dependency.modulePath, dependency.source.Version); err != nil {
+			return fmt.Errorf("%s module %s@%s is invalid: %w", dependency.name, dependency.modulePath, dependency.source.Version, err)
 		}
 		if dependency.source.ReplacePath != "" {
 			if err := validateLocalReplacementPath(dependency.source.ReplacePath); err != nil {
@@ -208,8 +212,8 @@ func validateProjectDependencies(deps ProjectDependencies, profile ImportProfile
 }
 
 func validateGoModulePath(value string) error {
-	if !composeModulePath.MatchString(value) || strings.Contains(value, "//") || strings.Contains(value, "..") || strings.HasSuffix(value, "/") {
-		return fmt.Errorf("%q is not a canonical Go module path", value)
+	if err := modmodule.CheckPath(value); err != nil {
+		return fmt.Errorf("%q is not a canonical Go module path: %w", value, err)
 	}
 	return nil
 }
