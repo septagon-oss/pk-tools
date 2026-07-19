@@ -146,6 +146,15 @@ func TestBuildProjectRejectsUnsafeConfiguration(t *testing.T) {
 	}
 }
 
+func TestLocalReplacementPathsUsePortableGoModSyntax(t *testing.T) {
+	if err := validateLocalReplacementPath("../../core/backend"); err != nil {
+		t.Fatalf("portable relative replacement rejected: %v", err)
+	}
+	if err := validateLocalReplacementPath(`..\..\core\backend`); err == nil {
+		t.Fatal("OS-specific replacement separators were accepted")
+	}
+}
+
 func TestBuildProjectDefaults(t *testing.T) {
 	result, err := BuildProject(ComposeConfig{
 		Name:         "My App",

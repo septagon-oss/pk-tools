@@ -7,7 +7,7 @@ package scaffold
 import (
 	"encoding/json"
 	"fmt"
-	"path/filepath"
+	"path"
 	"regexp"
 	"sort"
 	"strconv"
@@ -225,7 +225,10 @@ func validateLocalReplacementPath(value string) error {
 	if strings.ContainsAny(value, "\r\n\x00") {
 		return fmt.Errorf("local path must be a single line without NUL bytes")
 	}
-	if filepath.Clean(value) != value || value == "." {
+	if strings.Contains(value, `\`) {
+		return fmt.Errorf("local path %q must use forward slashes in go.mod", value)
+	}
+	if path.Clean(value) != value || value == "." {
 		return fmt.Errorf("local path %q must be canonical and must not resolve to the generated project", value)
 	}
 	return nil
