@@ -7,13 +7,11 @@ package scaffold
 import "strings"
 
 const (
-	defaultBackendKitImportRoot       = "example.com/platformkit/backend-kit"
-	defaultBusinessModulesImportRoot  = "example.com/platformkit/business-modules"
-	defaultFrontendKitImportRoot      = "example.com/platformkit/frontend-kit"
-	defaultPortsImportRoot            = "example.com/platformkit/ports"
-	defaultTestsImportRoot            = "example.com/platformkit/tests"
-	defaultBackendKitReplacePath      = "../backend-kit"
-	defaultBusinessModulesReplacePath = "../business-modules"
+	defaultBackendKitImportRoot      = "example.com/platformkit/backend-kit"
+	defaultBusinessModulesImportRoot = "example.com/platformkit/business-modules"
+	defaultFrontendKitImportRoot     = "example.com/platformkit/frontend-kit"
+	defaultPortsImportRoot           = "example.com/platformkit/ports"
+	defaultTestsImportRoot           = "example.com/platformkit/tests"
 )
 
 // ImportProfile describes the repository roots used in generated Go source.
@@ -21,26 +19,22 @@ const (
 // profile from their adapter layer so generated code keeps matching that
 // workspace without baking private roots into this package.
 type ImportProfile struct {
-	BackendKit                 string `json:"backendKit,omitempty"`
-	BusinessModules            string `json:"businessModules,omitempty"`
-	FrontendKit                string `json:"frontendKit,omitempty"`
-	Ports                      string `json:"ports,omitempty"`
-	Tests                      string `json:"tests,omitempty"`
-	BackendKitReplacePath      string `json:"backendKitReplacePath,omitempty"`
-	BusinessModulesReplacePath string `json:"businessModulesReplacePath,omitempty"`
+	BackendKit      string `json:"backendKit,omitempty"`
+	BusinessModules string `json:"businessModules,omitempty"`
+	FrontendKit     string `json:"frontendKit,omitempty"`
+	Ports           string `json:"ports,omitempty"`
+	Tests           string `json:"tests,omitempty"`
 }
 
 // DefaultImportProfile returns the neutral roots emitted when callers do not
 // provide their own workspace profile.
 func DefaultImportProfile() ImportProfile {
 	return ImportProfile{
-		BackendKit:                 defaultBackendKitImportRoot,
-		BusinessModules:            defaultBusinessModulesImportRoot,
-		FrontendKit:                defaultFrontendKitImportRoot,
-		Ports:                      defaultPortsImportRoot,
-		Tests:                      defaultTestsImportRoot,
-		BackendKitReplacePath:      defaultBackendKitReplacePath,
-		BusinessModulesReplacePath: defaultBusinessModulesReplacePath,
+		BackendKit:      defaultBackendKitImportRoot,
+		BusinessModules: defaultBusinessModulesImportRoot,
+		FrontendKit:     defaultFrontendKitImportRoot,
+		Ports:           defaultPortsImportRoot,
+		Tests:           defaultTestsImportRoot,
 	}
 }
 
@@ -61,12 +55,6 @@ func (p ImportProfile) normalized() ImportProfile {
 	if strings.TrimSpace(p.Tests) == "" {
 		p.Tests = defaults.Tests
 	}
-	if strings.TrimSpace(p.BackendKitReplacePath) == "" {
-		p.BackendKitReplacePath = defaults.BackendKitReplacePath
-	}
-	if strings.TrimSpace(p.BusinessModulesReplacePath) == "" {
-		p.BusinessModulesReplacePath = defaults.BusinessModulesReplacePath
-	}
 	return p
 }
 
@@ -78,8 +66,6 @@ func applyImportProfile(content string, profile ImportProfile) string {
 		defaultFrontendKitImportRoot, profile.FrontendKit,
 		defaultPortsImportRoot, profile.Ports,
 		defaultTestsImportRoot, profile.Tests,
-		defaultBackendKitReplacePath, profile.BackendKitReplacePath,
-		defaultBusinessModulesReplacePath, profile.BusinessModulesReplacePath,
 	)
 	return replacer.Replace(content)
 }

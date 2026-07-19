@@ -6,13 +6,13 @@ package scaffold
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
 // generateEntityCode generates the Go source for an entity.
-func generateEntityCode(moduleName, entityName string, fields []Field) (string, error) {
+func generateEntityCode(moduleName, entityName, tableName string, fields []Field) (string, error) {
 	snakeName := ToSnakeCase(entityName)
-	tableName := snakeName + "s"
 
 	var fieldLines strings.Builder
 	var mcpQueryFields strings.Builder
@@ -43,7 +43,8 @@ func generateEntityCode(moduleName, entityName string, fields []Field) (string, 
 		jsonTag := fmt.Sprintf(`json:"%s"`, f.Name)
 		docTag := ""
 		if f.Description != "" {
-			docTag = fmt.Sprintf(` doc:"%s"`, f.Description)
+			quotedDescription := strings.ReplaceAll(strconv.Quote(f.Description), "`", `\x60`)
+			docTag = " doc:" + quotedDescription
 		}
 
 		fmt.Fprintf(&fieldLines, "\t%s %s `%s %s%s`\n",
@@ -128,7 +129,7 @@ func (e *%s) MCPQueryFields() []mcp.MCPQueryField {
 }
 
 // generateEntityTestCode generates a test file for an entity.
-func generateEntityTestCode(moduleName, entityName string, _ []Field) string {
+func generateEntityTestCode(moduleName, entityName, tableName string, _ []Field) string {
 	snakeName := ToSnakeCase(entityName)
 
 	return fmt.Sprintf(
@@ -146,8 +147,8 @@ var _ mcp.MCPQueryable = (*%s)(nil)
 
 func TestNew%s_TableName(t *testing.T) {
 	e := &%s{}
-	if got := e.TableName(); got != "%ss" {
-		t.Errorf("TableName() = %%q, want %%q", got, "%ss")
+	if got := e.TableName(); got != %q {
+		t.Errorf("TableName() = %%q, want %%q", got, %q)
 	}
 }
 
@@ -200,7 +201,7 @@ func TestNew%s_MCPQueryFields(t *testing.T) {
 }
 `,
 		entityName, entityName,
-		entityName, entityName, snakeName, snakeName,
+		entityName, entityName, tableName, tableName,
 		entityName, entityName, snakeName, snakeName,
 		entityName, entityName,
 		entityName, entityName, moduleName, moduleName,
@@ -209,9 +210,9 @@ func TestNew%s_MCPQueryFields(t *testing.T) {
 }
 
 // generateEntityE2ECode generates a colocated E2E config file for an entity.
-func generateEntityE2ECode(moduleName, entityName string, fields []Field) string {
+func generateEntityE2ECode(moduleName, entityName, tableName string, fields []Field) string {
 	snakeName := ToSnakeCase(entityName)
-	basePath := "/admin/" + strings.ReplaceAll(moduleName, "_", "-") + "/" + snakeName + "s"
+	basePath := "/admin/" + strings.ReplaceAll(moduleName, "_", "-") + "/" + tableName
 
 	var formFields strings.Builder
 	var requiredFields strings.Builder
@@ -263,14 +264,13 @@ var %sE2E = config.NewEntityConfig(%q, config.EntityOptions{
 }
 
 // generateMigrationCode generates SQL migration up and down files.
-func generateMigrationCode(_, entityName string, fields []Field) (string, string, error) {
-	tableName := ToSnakeCase(entityName) + "s"
+func generateMigrationCode(_, tableName string, fields []Field) (string, string, error) {
 
 	// Up migration.
 	var up strings.Builder
 	up.WriteString("-- +goose Up\n")
 	up.WriteString("-- +goose StatementBegin\n")
-	fmt.Fprintf(&up, "CREATE TABLE IF NOT EXISTS %s (\n", tableName)
+	fmt.Fprintf(&up, "CREATE TABLE %s (\n", tableName)
 	up.WriteString("    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),\n")
 	up.WriteString("    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),\n")
 	up.WriteString("    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),\n")
@@ -308,14 +308,14 @@ func generateMigrationCode(_, entityName string, fields []Field) (string, string
 	upBuilder.WriteString("-- +goose StatementEnd\n\n")
 
 	// Indexes.
-	fmt.Fprintf(&upBuilder, "CREATE INDEX IF NOT EXISTS idx_%s_tenant_id ON %s(tenant_id) WHERE deleted_at IS NULL;\n", tableName, tableName)
-	fmt.Fprintf(&upBuilder, "CREATE INDEX IF NOT EXISTS idx_%s_created_at ON %s(created_at) WHERE deleted_at IS NULL;\n", tableName, tableName)
+	fmt.Fprintf(&upBuilder, "CREATE INDEX idx_%s_tenant_id ON %s(tenant_id) WHERE deleted_at IS NULL;\n", tableName, tableName)
+	fmt.Fprintf(&upBuilder, "CREATE INDEX idx_%s_created_at ON %s(created_at) WHERE deleted_at IS NULL;\n", tableName, tableName)
 	for _, field := range indexFields {
-		fmt.Fprintf(&upBuilder, "CREATE INDEX IF NOT EXISTS idx_%s_%s ON %s(%s) WHERE deleted_at IS NULL;\n", tableName, field, tableName, field)
+		fmt.Fprintf(&upBuilder, "CREATE INDEX idx_%s_%s ON %s(%s) WHERE deleted_at IS NULL;\n", tableName, field, tableName, field)
 	}
 
 	upBuilder.WriteString("\n-- Auto-update updated_at\n")
-	fmt.Fprintf(&upBuilder, "CREATE OR REPLACE FUNCTION update_%s_updated_at()\n", tableName)
+	fmt.Fprintf(&upBuilder, "CREATE FUNCTION update_%s_updated_at()\n", tableName)
 	upBuilder.WriteString("RETURNS TRIGGER AS $$\n")
 	upBuilder.WriteString("BEGIN\n")
 	upBuilder.WriteString("    NEW.updated_at = NOW();\n")
@@ -329,9 +329,9 @@ func generateMigrationCode(_, entityName string, fields []Field) (string, string
 	// Down migration.
 	var down strings.Builder
 	down.WriteString("-- +goose Down\n")
-	fmt.Fprintf(&down, "DROP TRIGGER IF EXISTS trigger_%s_updated_at ON %s;\n", tableName, tableName)
-	fmt.Fprintf(&down, "DROP FUNCTION IF EXISTS update_%s_updated_at();\n", tableName)
-	fmt.Fprintf(&down, "DROP TABLE IF EXISTS %s;\n", tableName)
+	fmt.Fprintf(&down, "DROP TRIGGER trigger_%s_updated_at ON %s;\n", tableName, tableName)
+	fmt.Fprintf(&down, "DROP FUNCTION update_%s_updated_at();\n", tableName)
+	fmt.Fprintf(&down, "DROP TABLE %s;\n", tableName)
 
 	return upBuilder.String(), down.String(), nil
 }
@@ -340,6 +340,10 @@ func generateMigrationCode(_, entityName string, fields []Field) (string, string
 func generateFeatureFiles(moduleName, featureName string, useCases []string) []GeneratedFile {
 	pascalFeature := ToPascalCase(featureName)
 	pascalModule := ToPascalCase(moduleName)
+	serviceProvider := ""
+	if len(useCases) > 0 {
+		serviceProvider = "\n\t// Domain service\n\tb.Provider(NewService)\n"
+	}
 
 	featureGo := fmt.Sprintf(
 		`package %s
@@ -371,12 +375,7 @@ func New%sFeature() module.Feature {
 	//     EnableMCP: true,
 	// })
 
-	// Domain service
-	b.Provider(NewService)
-
-	// Handler with automatic route registration
-	helpers.RouteHandler[*Handler](b, NewHandler)
-
+%s
 	// Section renderer for the generated admin surface.
 	helpers.SectionRenderer[*%sSectionRenderer](b, New%sSectionRenderer)
 
@@ -392,53 +391,18 @@ func New%sFeature() module.Feature {
 		featureName, pascalFeature,
 		pascalFeature, pascalModule,
 		moduleName, moduleName, featureName,
+		serviceProvider,
 		pascalFeature, pascalFeature,
 		pascalFeature, pascalFeature,
 		moduleName, moduleName,
 	)
 
-	handlerGo := fmt.Sprintf(`package %s
-
-// handler.go - HTTP boundary for the feature.
-// Per: ADR-0017.
-// Discipline: C-14.
-
-import (
-	"github.com/danielgtaylor/huma/v2"
-)
-
-// Handler handles HTTP requests for the %s feature.
-type Handler struct {
-	service *Service
-}
-
-// NewHandler creates a new handler.
-func NewHandler(service *Service) *Handler {
-	return &Handler{service: service}
-}
-
-// RegisterRoutes implements helpers.RouteRegistrar.
-func (h *Handler) RegisterRoutes(api huma.API) {
-	// ADD YOUR ROUTES HERE. Example:
-	// huma.Register(api, huma.Operation{
-	//     OperationID: "list-%s",
-	//     Method:      http.MethodGet,
-	//     Path:        "/api/v1/%s/%s",
-	//     Summary:     "List %s",
-	// }, h.List)
-}
-`, featureName,
-		featureName,
-		featureName, moduleName, featureName, featureName)
-
-	// "context" is only needed when there are use-case stubs that take
-	// a ctx parameter — without use cases the import is unused and the
-	// scaffolded module fails to compile.
-	contextImport := ""
-	if len(useCases) > 0 {
-		contextImport = "\t\"context\"\n\n"
+	// Use-case boundaries fail explicitly until their domain implementation is
+	// supplied; they must never report false success from generated code.
+	files := []GeneratedFile{{Path: "feature.go", Content: featureGo}}
+	if len(useCases) == 0 {
+		return files
 	}
-
 	var serviceGo strings.Builder
 	serviceGo.WriteString(fmt.Sprintf(`package %s
 
@@ -447,38 +411,40 @@ func (h *Handler) RegisterRoutes(api huma.API) {
 // Discipline: C-14.
 
 import (
-%s	"example.com/platformkit/backend-kit/observability/logger"
+	"context"
+	"errors"
+	"fmt"
+
+	"example.com/platformkit/backend-kit/observability/logger"
 )
 
 // Service implements the business logic for %s.
 type Service struct {
-	logger logger.Logger
+	log logger.Logger
 }
 
 // NewService creates a new service.
-func NewService(logger logger.Logger) *Service {
-	return &Service{logger: logger}
+func NewService(log logger.Logger) (*Service, error) {
+	if log == nil {
+		return nil, fmt.Errorf("%s.%s: logger is required")
+	}
+	return &Service{log: log}, nil
 }
-`, featureName, contextImport, featureName))
+`, featureName, featureName, moduleName, featureName))
 
-	// Add use case stubs.
+	// Add fail-fast use-case boundaries.
 	for _, uc := range useCases {
 		ucPascal := ToPascalCase(uc)
 		serviceGo.WriteString(fmt.Sprintf(`
 // %s executes the %s use case.
 func (s *Service) %s(ctx context.Context) error {
-	s.logger.Info(ctx, "Executing %s")
-	// IMPLEMENT: add business logic here
-	return nil
+	s.log.Info(ctx, "Executing %s")
+	return fmt.Errorf("%s: %%w", errors.ErrUnsupported)
 }
-`, ucPascal, uc, ucPascal, uc))
+`, ucPascal, uc, ucPascal, uc, ucPascal))
 	}
 
-	return []GeneratedFile{
-		{Path: "feature.go", Content: featureGo},
-		{Path: "handler.go", Content: handlerGo},
-		{Path: "service.go", Content: serviceGo.String()},
-	}
+	return append(files, GeneratedFile{Path: "service.go", Content: serviceGo.String()})
 }
 
 // generateFeatureTestCode generates a test file for a feature.
@@ -650,7 +616,7 @@ func generateRegistrationCode(moduleName string) map[string]string {
 	return map[string]string{
 		"bundleEntry":  fmt.Sprintf(`{ID: "%s", New: %s.NewModule, Features: %s.GetFeatures},`, moduleName, moduleName, moduleName),
 		"import":       fmt.Sprintf(`%s "example.com/platformkit/business-modules/%s"`, moduleName, moduleName),
-		"usage":        fmt.Sprintf("platformmodules.NewModuleSet().WithModules(%q)", moduleName),
+		"usage":        fmt.Sprintf("moduleregistry.BundleForModules(%q)", moduleName),
 		"file":         "platformkit-business-modules/catalog/moduleregistry/bundle.go",
 		"instructions": "1. Add the module import to catalog/moduleregistry/bundle.go\n2. Add a defaultEntries row with ID, New, and Features\n3. Add the ID to defaultModuleIDs only if it belongs in the default preset",
 	}

@@ -16,6 +16,7 @@ func TestGenerateE2EFlowUsesModuleOwnedContract(t *testing.T) {
 		ModuleName: "inventory_management",
 		Feature:    "catalog",
 		EntityName: "StockItem",
+		TableName:  "stock_items",
 		Fields: []Field{
 			{Name: "name", Type: "string", Required: true},
 			{Name: "quantity", Type: "integer", Required: true},
@@ -61,6 +62,7 @@ func TestGenerateE2EFlowRejectsUnknownFieldType(t *testing.T) {
 		ModuleName: "inventory_management",
 		Feature:    "catalog",
 		EntityName: "StockItem",
+		TableName:  "stock_items",
 		Fields:     []Field{{Name: "quantity", Type: "integer_guess"}},
 	})
 	if err == nil || !strings.Contains(err.Error(), `field "quantity"`) {
@@ -69,16 +71,19 @@ func TestGenerateE2EFlowRejectsUnknownFieldType(t *testing.T) {
 }
 
 func TestGenerateE2EFlowAppliesWorkspaceProfile(t *testing.T) {
-	result, err := GenerateE2EFlowWithProfile(E2EFlowOptions{
+	result, err := GenerateE2EFlow(E2EFlowOptions{
 		ModuleName: "inventory_management",
 		Feature:    "catalog",
 		EntityName: "StockItem",
-	}, ImportProfile{
-		BusinessModules: "corp.example/business-modules",
-		Tests:           "corp.example/platform-tests",
+		TableName:  "stock_items",
+		Fields:     []Field{{Name: "quantity", Type: "integer"}},
+		ImportProfile: ImportProfile{
+			BusinessModules: "corp.example/business-modules",
+			Tests:           "corp.example/platform-tests",
+		},
 	})
 	if err != nil {
-		t.Fatalf("GenerateE2EFlowWithProfile: %v", err)
+		t.Fatalf("GenerateE2EFlow: %v", err)
 	}
 	all := result.Files[0].Content + result.Files[1].Content
 	for _, want := range []string{"corp.example/business-modules/tests/e2eflow", "corp.example/platform-tests/flow"} {

@@ -1,7 +1,5 @@
-// compose.go owns complete project scaffold generation and its normalized
-// configuration contract.
 // Implements: REQ-016.
-// Per: ADR-0017 (composition through dependency injection), ADR-0029 (file purpose declaration).
+// Per: ADR-0061.
 // Discipline: C-14.
 
 package scaffold
@@ -9,20 +7,51 @@ package scaffold
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 )
 
+var (
+	composeAppNamePattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9 _-]*[A-Za-z0-9])?$`)
+	composeModulePattern  = regexp.MustCompile(`^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$`)
+	composeModulePath     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._~+/-]*$`)
+	composeModuleVersion  = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9][A-Za-z0-9.-]*)?$`)
+)
+
+// GoModuleSource identifies one direct generated-project dependency. Version
+// is always explicit; ReplacePath selects a caller-owned local checkout.
+type GoModuleSource struct {
+	Version     string `json:"version"`
+	ReplacePath string `json:"replacePath,omitempty"`
+}
+
+// GoModuleReplacement makes a transitive workspace module available to a
+// generated project without relying on ambient go.work state.
+type GoModuleReplacement struct {
+	ModulePath string `json:"modulePath"`
+	LocalPath  string `json:"localPath"`
+}
+
+// ProjectDependencies is the complete, reproducible Go dependency contract
+// for a generated project.
+type ProjectDependencies struct {
+	BackendKit             GoModuleSource        `json:"backendKit"`
+	BusinessModules        GoModuleSource        `json:"businessModules"`
+	AdditionalReplacements []GoModuleReplacement `json:"additionalReplacements,omitempty"`
+}
+
 // ComposeConfig holds parameters for project file generation.
 type ComposeConfig struct {
-	Name         string   // Application name
-	ModulePath   string   // Go module path (e.g. "github.com/myorg/myapp")
-	Description  string   // Application description
-	Modules      []string // Module names to include
-	Port         string   // Application port (default: "8080")
-	DBPort       string   // PostgreSQL port (default: "5432")
-	AdminEmail   string   // Admin email for seed data (default: "admin@example.com")
-	TenantName   string   // Default tenant name for seed data (default: "Default")
-	LocalDevMode bool     // Include go.mod replace directives for local dev
+	Name         string              // Application name
+	ModulePath   string              // Go module path (e.g. "github.com/myorg/myapp")
+	Description  string              // Application description
+	Modules      []string            // Module names to include
+	Port         string              // Application port (default: "8080")
+	DBPort       string              // PostgreSQL port (default: "5432")
+	Dependencies ProjectDependencies // Explicit versions and optional local checkouts
 
 	ImportProfile ImportProfile // Repository roots used by generated Go source
 }
@@ -42,7 +71,10 @@ type ProjectResult struct {
 // BuildProject generates all files for a complete, buildable platformkit project.
 func BuildProject(cfg ComposeConfig) (ProjectResult, error) {
 	applyComposeDefaults(&cfg)
-	projectManifest, err := GenerateProjectManifest(cfg)
+	if err := validateComposeConfig(cfg); err != nil {
+		return ProjectResult{}, err
+	}
+	projectManifest, err := generateProjectManifest(cfg)
 	if err != nil {
 		return ProjectResult{}, err
 	}
@@ -51,49 +83,166 @@ func BuildProject(cfg ComposeConfig) (ProjectResult, error) {
 
 	files := []GeneratedFile{
 		{Path: ".platformkit/project.json", Content: projectManifest},
-		{Path: "main.go", Content: GenerateMainGoWithProfile(cfg.Name, cfg.Modules, cfg.Port, cfg.ImportProfile)},
-		{Path: "go.mod", Content: GenerateGoModWithProfile(cfg.ModulePath, cfg.LocalDevMode, cfg.ImportProfile)},
-		{Path: "config.yaml", Content: GenerateConfigYAML(cfg.Name, cfg.Description, cfg.Modules)},
-		{Path: "Dockerfile", Content: GenerateDockerfile(cfg.Name, cfg.Port)},
-		{Path: "docker-compose.yml", Content: GenerateDockerCompose(cfg.Name, cfg.Port, cfg.DBPort)},
-		{Path: "Makefile", Content: GenerateMakefile(cfg.Name)},
-		{Path: "migrations/seed.sql", Content: GenerateSeedData(cfg.AdminEmail, cfg.TenantName, cfg.Modules)},
+		{Path: ".env.example", Content: generateEnvExample(dbName)},
+		{Path: ".gitignore", Content: generateGitIgnore()},
+		{Path: ".dockerignore", Content: generateDockerIgnore()},
+		{Path: "main.go", Content: generateMainGo(cfg.Name, cfg.Description, cfg.Modules, cfg.ImportProfile)},
+		{Path: "go.mod", Content: generateGoMod(cfg.ModulePath, cfg.Dependencies, cfg.ImportProfile)},
+		{Path: "config.yaml", Content: generateConfigYAML(cfg.Name, cfg.Description, cfg.Modules, cfg.Port)},
+		{Path: "Dockerfile", Content: generateDockerfile(cfg.Name, cfg.Port)},
+		{Path: "docker-compose.yml", Content: generateDockerCompose(cfg.Name, cfg.Port, cfg.DBPort)},
+		{Path: "Makefile", Content: generateMakefile(cfg.Name)},
+		{Path: "locales/en.json", Content: "[]\n"},
 	}
 
 	directoryStructure := fmt.Sprintf(`%s/
 ├── .platformkit/
 │   └── project.json        # Platformkit app manifest
+├── .env.example            # Required local secret names (values stay uncommitted)
+├── .gitignore             # Secret and build-artifact exclusions
+├── .dockerignore          # Minimal, secret-safe container context
 ├── main.go                 # Application entry point
 ├── go.mod                  # Go module definition
 ├── config.yaml             # Application configuration
 ├── Dockerfile              # Multi-stage Docker build
 ├── docker-compose.yml      # Local development stack
 ├── Makefile                # Build and dev commands
-├── migrations/
-│   └── seed.sql            # Initial seed data
-├── locales/                # i18n translation files
-│   └── en.json
-└── internal/               # Application-specific code
-    └── README.md
+└── locales/                # i18n translation files
+    └── en.json              # Initial English message catalog
 `, cfg.Name)
 
 	return ProjectResult{
 		Name:               cfg.Name,
 		ModulePath:         cfg.ModulePath,
-		Modules:            cfg.Modules,
+		Modules:            append([]string(nil), cfg.Modules...),
 		Files:              files,
 		DirectoryStructure: directoryStructure,
 		DBName:             dbName,
 		QuickStart: fmt.Sprintf(`# Quick Start
-1. Write files to disk
-2. cd %s
+1. Write files to disk and cd %s
+2. Copy .env.example to .env and set every secret value
 3. make deps       # Download dependencies
-4. make docker-up  # Start PostgreSQL, Redis, NATS
-5. make migrate    # Run seed migrations
-6. make run        # Start the application
+4. make docker-up  # Start the application and its dependencies
+5. make docker-logs
 `, cfg.Name),
 		NextSteps: []string{"scaffold.WriteFiles", "runtime.Build", "runtime.Migrate"},
 	}, nil
+}
+
+func validateComposeConfig(cfg ComposeConfig) error {
+	if !composeAppNamePattern.MatchString(cfg.Name) {
+		return fmt.Errorf("application name must start with a letter or digit and contain only letters, digits, spaces, underscores, or hyphens")
+	}
+	if err := validateComposeText("description", cfg.Description); err != nil {
+		return err
+	}
+	if err := validateGoModulePath(cfg.ModulePath); err != nil {
+		return fmt.Errorf("project module path: %w", err)
+	}
+	if err := validateComposePort("application port", cfg.Port); err != nil {
+		return err
+	}
+	if err := validateComposePort("database port", cfg.DBPort); err != nil {
+		return err
+	}
+	if err := validateProjectDependencies(cfg.Dependencies, cfg.ImportProfile); err != nil {
+		return err
+	}
+	seenModules := make(map[string]struct{}, len(cfg.Modules))
+	if len(cfg.Modules) == 0 {
+		return fmt.Errorf("at least one module is required")
+	}
+	for _, moduleName := range cfg.Modules {
+		if !composeModulePattern.MatchString(moduleName) {
+			return fmt.Errorf("module name %q must use canonical snake_case", moduleName)
+		}
+		if _, duplicate := seenModules[moduleName]; duplicate {
+			return fmt.Errorf("module name %q is duplicated", moduleName)
+		}
+		if moduleName == "infrastructure" {
+			return fmt.Errorf("module name %q is application-owned; infrastructure is wired through ModuleFromConfig", moduleName)
+		}
+		seenModules[moduleName] = struct{}{}
+	}
+	return nil
+}
+
+func validateProjectDependencies(deps ProjectDependencies, profile ImportProfile) error {
+	profile = profile.normalized()
+	direct := []struct {
+		name       string
+		modulePath string
+		source     GoModuleSource
+	}{
+		{name: "backend kit", modulePath: profile.BackendKit, source: deps.BackendKit},
+		{name: "business modules", modulePath: profile.BusinessModules, source: deps.BusinessModules},
+	}
+	seen := make(map[string]struct{}, len(deps.AdditionalReplacements)+len(direct))
+	for _, dependency := range direct {
+		if err := validateGoModulePath(dependency.modulePath); err != nil {
+			return fmt.Errorf("%s module path: %w", dependency.name, err)
+		}
+		if !composeModuleVersion.MatchString(dependency.source.Version) {
+			return fmt.Errorf("%s version %q must be an explicit canonical Go module version", dependency.name, dependency.source.Version)
+		}
+		if dependency.source.ReplacePath != "" {
+			if err := validateLocalReplacementPath(dependency.source.ReplacePath); err != nil {
+				return fmt.Errorf("%s replacement: %w", dependency.name, err)
+			}
+		}
+		seen[dependency.modulePath] = struct{}{}
+	}
+	for _, replacement := range deps.AdditionalReplacements {
+		if err := validateGoModulePath(replacement.ModulePath); err != nil {
+			return fmt.Errorf("additional replacement module path: %w", err)
+		}
+		if _, duplicate := seen[replacement.ModulePath]; duplicate {
+			return fmt.Errorf("Go module replacement %q is duplicated", replacement.ModulePath)
+		}
+		if err := validateLocalReplacementPath(replacement.LocalPath); err != nil {
+			return fmt.Errorf("replacement for %s: %w", replacement.ModulePath, err)
+		}
+		seen[replacement.ModulePath] = struct{}{}
+	}
+	return nil
+}
+
+func validateGoModulePath(value string) error {
+	if !composeModulePath.MatchString(value) || strings.Contains(value, "//") || strings.Contains(value, "..") || strings.HasSuffix(value, "/") {
+		return fmt.Errorf("%q is not a canonical Go module path", value)
+	}
+	return nil
+}
+
+func validateLocalReplacementPath(value string) error {
+	if value == "" {
+		return fmt.Errorf("local path is required")
+	}
+	if strings.ContainsAny(value, "\r\n\x00") {
+		return fmt.Errorf("local path must be a single line without NUL bytes")
+	}
+	if filepath.Clean(value) != value || value == "." {
+		return fmt.Errorf("local path %q must be canonical and must not resolve to the generated project", value)
+	}
+	return nil
+}
+
+func validateComposeText(field, value string) error {
+	if value == "" {
+		return nil
+	}
+	if strings.ContainsAny(value, "\r\n\x00") {
+		return fmt.Errorf("%s must be a single line without NUL bytes", field)
+	}
+	return nil
+}
+
+func validateComposePort(field, value string) error {
+	port, err := strconv.Atoi(value)
+	if err != nil || port < 1 || port > 65535 || strconv.Itoa(port) != value {
+		return fmt.Errorf("%s %q must be a canonical integer between 1 and 65535", field, value)
+	}
+	return nil
 }
 
 func applyComposeDefaults(cfg *ComposeConfig) {
@@ -103,19 +252,42 @@ func applyComposeDefaults(cfg *ComposeConfig) {
 	if cfg.DBPort == "" {
 		cfg.DBPort = "5432"
 	}
-	if cfg.AdminEmail == "" {
-		cfg.AdminEmail = "admin@example.com"
-	}
-	if cfg.TenantName == "" {
-		cfg.TenantName = "Default"
-	}
 	if cfg.ModulePath == "" {
 		cfg.ModulePath = "github.com/myorg/" + strings.ReplaceAll(strings.ToLower(cfg.Name), " ", "-")
 	}
 }
 
-// GenerateProjectManifest produces the app marker used by CLI context detection.
-func GenerateProjectManifest(cfg ComposeConfig) (string, error) {
+func generateEnvExample(dbName string) string {
+	return fmt.Sprintf(`POSTGRES_USER=postgres
+POSTGRES_DB=%s
+POSTGRES_PASSWORD=
+PAAS_DATABASE_DSN=
+PAAS_REDIS_ADDR=127.0.0.1:6379
+PAAS_NATS_URL=nats://127.0.0.1:4222
+PAAS_AUTH_JWT_SECRET_KEY=
+PAAS_NATS_CONTEXT_AUTH_SECRET=
+`, dbName)
+}
+
+func generateGitIgnore() string {
+	return `.env
+bin/
+coverage.out
+coverage.html
+vendor/
+`
+}
+
+func generateDockerIgnore() string {
+	return `.git
+.env
+bin
+coverage.out
+coverage.html
+`
+}
+
+func generateProjectManifest(cfg ComposeConfig) (string, error) {
 	manifest := struct {
 		SchemaVersion int      `json:"schemaVersion"`
 		Kind          string   `json:"kind"`
@@ -140,8 +312,7 @@ func GenerateProjectManifest(cfg ComposeConfig) (string, error) {
 	return string(body) + "\n", nil
 }
 
-// GenerateConfigYAML produces a config.yaml for a platformkit application.
-func GenerateConfigYAML(name, description string, modules []string) string {
+func generateConfigYAML(name, description string, modules []string, port string) string {
 	dbName := strings.ReplaceAll(strings.ToLower(name), " ", "_")
 	mcpName := strings.ReplaceAll(strings.ToLower(name), " ", "-")
 
@@ -153,7 +324,7 @@ func GenerateConfigYAML(name, description string, modules []string) string {
 	sb.WriteString("\n# Server configuration\n")
 	sb.WriteString("server:\n")
 	sb.WriteString("  host: \"0.0.0.0\"\n")
-	sb.WriteString("  port: \"8080\"\n")
+	fmt.Fprintf(&sb, "  port: %q\n", port)
 	sb.WriteString("  metrics_port: \"9091\"\n")
 	sb.WriteString("  read_timeout: 30s\n")
 	sb.WriteString("  write_timeout: 30s\n")
@@ -162,7 +333,7 @@ func GenerateConfigYAML(name, description string, modules []string) string {
 
 	sb.WriteString("\n# Database configuration\n")
 	sb.WriteString("database:\n")
-	fmt.Fprintf(&sb, "  dsn: \"postgres://postgres:postgres@localhost:5432/%s?sslmode=disable\"\n", dbName)
+	sb.WriteString("  dsn: \"\"  # Required via PAAS_DATABASE_DSN\n")
 	sb.WriteString("  driver: \"postgres\"\n")
 	sb.WriteString("  maxOpenConns: 25\n")
 	sb.WriteString("  maxIdleConns: 5\n")
@@ -188,7 +359,7 @@ func GenerateConfigYAML(name, description string, modules []string) string {
 
 	sb.WriteString("\n# Authentication configuration\n")
 	sb.WriteString("auth:\n")
-	sb.WriteString("  jwt_secret_key: \"change-me-in-production\"\n")
+	sb.WriteString("  jwt_secret_key: \"\"  # Required via PAAS_AUTH_JWT_SECRET_KEY (minimum 32 characters)\n")
 	sb.WriteString("  token_expiry: \"24h\"\n")
 	sb.WriteString("  refresh_token_expiry: \"168h\"\n")
 
@@ -228,30 +399,22 @@ func GenerateConfigYAML(name, description string, modules []string) string {
 	return sb.String()
 }
 
-// GenerateMainGo produces a main.go entry point for a platformkit application.
-func GenerateMainGo(name string, modules []string, port string) string {
-	return GenerateMainGoWithProfile(name, modules, port, ImportProfile{})
-}
-
-// GenerateMainGoWithProfile produces a main.go entry point using the supplied
-// repository roots for PlatformKit imports.
-func GenerateMainGoWithProfile(name string, modules []string, port string, profile ImportProfile) string {
+func generateMainGo(name, description string, modules []string, profile ImportProfile) string {
 	var sb strings.Builder
+	sb.WriteString("// Implements: REQ-016.\n")
+	sb.WriteString("// Per: ADR-0061.\n")
+	sb.WriteString("// Discipline: C-14.\n\n")
 	sb.WriteString("package main\n\n")
 	sb.WriteString("import (\n")
-	sb.WriteString("\t\"flag\"\n")
 	sb.WriteString("\t\"fmt\"\n")
 	sb.WriteString("\t\"os\"\n\n")
 	sb.WriteString("\t\"example.com/platformkit/backend-kit/app/application\"\n")
 	sb.WriteString("\t\"example.com/platformkit/backend-kit/app/module\"\n")
-	sb.WriteString("\t\"example.com/platformkit/backend-kit/infrastructure/config\"\n")
-	sb.WriteString("\tviperconfig \"example.com/platformkit/backend-kit/infrastructure/config/providers/viper\"\n")
-	sb.WriteString("\t\"example.com/platformkit/backend-kit/observability/logger/providers/zap\"\n\n")
-	sb.WriteString("\t// Import NATS provider\n")
-	sb.WriteString("\t_ \"example.com/platformkit/backend-kit/app/event/providers/nats\"\n\n")
-	sb.WriteString("\t// Import platform modules\n")
-	sb.WriteString("\tplatformmodules \"example.com/platformkit/business-modules\"\n")
+	sb.WriteString("\t_ \"example.com/platformkit/backend-kit/app/event/providers/jetstream\"\n\n")
+	sb.WriteString("\t\"example.com/platformkit/business-modules/catalog/moduleregistry\"\n")
+	sb.WriteString("\t\"example.com/platformkit/business-modules/infrastructure\"\n")
 	sb.WriteString(")\n\n")
+	sb.WriteString("var version = \"dev\"\n\n")
 
 	sb.WriteString("func main() {\n")
 	sb.WriteString("\tif err := run(); err != nil {\n")
@@ -261,121 +424,88 @@ func GenerateMainGoWithProfile(name string, modules []string, port string, profi
 	sb.WriteString("}\n\n")
 
 	sb.WriteString("func run() error {\n")
-	sb.WriteString("\t// Parse config file from --config flag\n")
-	sb.WriteString("\tconfigFile := flag.String(\"config\", \"\", \"Path to configuration file\")\n")
-	sb.WriteString("\tflag.Parse()\n\n")
-
-	sb.WriteString("\t// Load configuration\n")
-	sb.WriteString("\tvar cfg *config.Config\n")
-	sb.WriteString("\tif *configFile != \"\" {\n")
-	sb.WriteString("\t\tvar err error\n")
-	sb.WriteString("\t\tcfg, err = viperconfig.LoadConfig(*configFile)\n")
-	sb.WriteString("\t\tif err != nil {\n")
-	sb.WriteString("\t\t\treturn fmt.Errorf(\"failed to load config: %w\", err)\n")
-	sb.WriteString("\t\t}\n")
-	sb.WriteString("\t} else {\n")
-	sb.WriteString("\t\tcfg = &config.Config{Logging: config.LoggingConfig{LogLevel: \"info\", Env: \"development\"}}\n")
-	sb.WriteString("\t}\n\n")
-
-	sb.WriteString("\tif _, err := zap.NewLogger(cfg); err != nil {\n")
-	sb.WriteString("\t\treturn fmt.Errorf(\"failed to initialize logger: %w\", err)\n")
-	sb.WriteString("\t}\n\n")
-
-	sb.WriteString("\t// Select modules\n")
-	sb.WriteString("\tmoduleSet := platformmodules.NewModuleSet().WithModules(\n")
+	sb.WriteString("\tbundle, err := moduleregistry.BundleForModules(\n")
 	for _, mod := range modules {
 		fmt.Fprintf(&sb, "\t\t%q,\n", mod)
 	}
 	sb.WriteString("\t)\n")
-	sb.WriteString("\n")
-
-	sb.WriteString("\tif err := moduleSet.Register(); err != nil {\n")
-	sb.WriteString("\t\treturn fmt.Errorf(\"failed to register modules: %w\", err)\n")
+	sb.WriteString("\tif err != nil {\n")
+	sb.WriteString("\t\treturn fmt.Errorf(\"select module bundle: %w\", err)\n")
 	sb.WriteString("\t}\n\n")
-
-	sb.WriteString("\tmodules := module.All()\n\n")
+	sb.WriteString("\tcatalog, err := module.NewCatalog().Add(bundle).Build()\n")
+	sb.WriteString("\tif err != nil {\n")
+	sb.WriteString("\t\treturn fmt.Errorf(\"build module catalog: %w\", err)\n")
+	sb.WriteString("\t}\n")
+	sb.WriteString("\tselected := make([]module.Module, 0, len(bundle.Defaults()))\n")
+	sb.WriteString("\tfor _, id := range bundle.Defaults() {\n")
+	sb.WriteString("\t\tmod, err := catalog.BuildModule(id)\n")
+	sb.WriteString("\t\tif err != nil {\n")
+	sb.WriteString("\t\t\treturn fmt.Errorf(\"build module %q: %w\", id, err)\n")
+	sb.WriteString("\t\t}\n")
+	sb.WriteString("\t\tselected = append(selected, mod)\n")
+	sb.WriteString("\t}\n\n")
 
 	sb.WriteString("\tapp := application.New(\n")
 	fmt.Fprintf(&sb, "\t\tapplication.WithName(%q),\n", name)
-	sb.WriteString("\t\tapplication.WithVersion(\"1.0.0\"),\n")
-	sb.WriteString("\t\tapplication.WithModules(modules...),\n")
+	fmt.Fprintf(&sb, "\t\tapplication.WithDescription(%q),\n", description)
+	sb.WriteString("\t\tapplication.WithVersion(version),\n")
+	sb.WriteString("\t\tapplication.WithInfrastructureProvider(infrastructure.ModuleFromConfig),\n")
+	sb.WriteString("\t\tapplication.WithModules(selected...),\n")
 	sb.WriteString("\t)\n\n")
 	sb.WriteString("\treturn app.Run()\n")
 	sb.WriteString("}\n")
 	return applyImportProfile(sb.String(), profile)
 }
 
-// ModuleToFuncName converts a snake_case module name to a PascalCase method suffix.
-// e.g. "booking_management" -> "BookingManagement"
-func ModuleToFuncName(moduleName string) string {
-	parts := strings.Split(moduleName, "_")
-	var result strings.Builder
-	for _, part := range parts {
-		if len(part) > 0 {
-			result.WriteString(strings.ToUpper(part[:1]) + part[1:])
-		}
-	}
-	return result.String()
-}
-
-// GenerateGoMod produces a go.mod file for a platformkit application.
-func GenerateGoMod(modulePath string, localDev bool) string {
-	return GenerateGoModWithProfile(modulePath, localDev, ImportProfile{})
-}
-
-// GenerateGoModWithProfile produces a go.mod file using the supplied
-// repository roots and local replacement paths.
-func GenerateGoModWithProfile(modulePath string, localDev bool, profile ImportProfile) string {
+func generateGoMod(modulePath string, deps ProjectDependencies, profile ImportProfile) string {
+	profile = profile.normalized()
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "module %s\n\n", modulePath)
-	sb.WriteString("go 1.24\n\n")
+	sb.WriteString("go 1.26\n\n")
 	sb.WriteString("require (\n")
-	sb.WriteString("\texample.com/platformkit/backend-kit v0.0.0\n")
-	sb.WriteString("\texample.com/platformkit/business-modules v0.0.0\n")
-	sb.WriteString("\tgithub.com/danielgtaylor/huma/v2 v2.32.0\n")
-	sb.WriteString("\tgithub.com/google/uuid v1.6.0\n")
-	sb.WriteString("\tgithub.com/spf13/viper v1.19.0\n")
-	sb.WriteString("\tgo.uber.org/fx v1.23.0\n")
-	sb.WriteString("\tgo.uber.org/zap v1.27.0\n")
-	sb.WriteString("\tgorm.io/gorm v1.25.12\n")
-	sb.WriteString("\tgorm.io/driver/postgres v1.5.11\n")
-	sb.WriteString("\tgithub.com/nats-io/nats.go v1.38.0\n")
-	sb.WriteString("\tgithub.com/redis/go-redis/v9 v9.7.0\n")
+	fmt.Fprintf(&sb, "\t%s %s\n", profile.BackendKit, deps.BackendKit.Version)
+	fmt.Fprintf(&sb, "\t%s %s\n", profile.BusinessModules, deps.BusinessModules.Version)
 	sb.WriteString(")\n")
 
-	if localDev {
-		sb.WriteString("\n// Local development: point to local copies\n")
+	replacements := make([]GoModuleReplacement, 0, len(deps.AdditionalReplacements)+2)
+	if deps.BackendKit.ReplacePath != "" {
+		replacements = append(replacements, GoModuleReplacement{ModulePath: profile.BackendKit, LocalPath: deps.BackendKit.ReplacePath})
+	}
+	if deps.BusinessModules.ReplacePath != "" {
+		replacements = append(replacements, GoModuleReplacement{ModulePath: profile.BusinessModules, LocalPath: deps.BusinessModules.ReplacePath})
+	}
+	replacements = append(replacements, deps.AdditionalReplacements...)
+	if len(replacements) > 0 {
+		sort.Slice(replacements, func(i, j int) bool { return replacements[i].ModulePath < replacements[j].ModulePath })
+		sb.WriteString("\n// Explicit source graph for this generated project.\n")
 		sb.WriteString("replace (\n")
-		sb.WriteString("\texample.com/platformkit/backend-kit => ../backend-kit\n")
-		sb.WriteString("\texample.com/platformkit/business-modules => ../business-modules\n")
+		for _, replacement := range replacements {
+			fmt.Fprintf(&sb, "\t%s => %s\n", replacement.ModulePath, strconv.Quote(replacement.LocalPath))
+		}
 		sb.WriteString(")\n")
 	}
-
-	return applyImportProfile(sb.String(), profile)
+	return sb.String()
 }
 
-// GenerateDockerfile produces a multi-stage Dockerfile for a platformkit application.
-func GenerateDockerfile(name, port string) string {
-	if port == "" {
-		port = "8080"
-	}
+func generateDockerfile(name, port string) string {
 	binName := strings.ReplaceAll(strings.ToLower(name), " ", "-")
 	return fmt.Sprintf(`# Build stage
-FROM golang:1.24-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 RUN apk add --no-cache git ca-certificates
 
 WORKDIR /workspace
-COPY go.mod go.sum ./
-RUN go mod download
+COPY go.mod ./
+COPY vendor/ ./vendor/
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-    -ldflags="-s -w -X main.version=$(git describe --tags --always 2>/dev/null || echo dev)" \
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -mod=vendor \
+    -ldflags="-s -w -X main.version=${VERSION}" \
     -o /app/%s main.go
 
 # Runtime stage
-FROM alpine:3.21
+FROM alpine:3.22
 
 RUN apk --no-cache add ca-certificates tzdata
 RUN addgroup -S app && adduser -S app -G app
@@ -383,8 +513,7 @@ RUN addgroup -S app && adduser -S app -G app
 WORKDIR /app
 COPY --from=builder /app/%s .
 COPY config.yaml .
-COPY migrations/ ./migrations/
-COPY locales/ ./locales/ 2>/dev/null || true
+COPY locales/ ./locales/
 
 RUN mkdir -p /var/log/app /var/cache/app && chown -R app:app /app /var/log/app /var/cache/app
 
@@ -399,14 +528,7 @@ CMD ["./%s", "--config", "config.yaml"]
 `, binName, binName, port, port, binName)
 }
 
-// GenerateDockerCompose produces a docker-compose.yml with app, PostgreSQL, Redis, and NATS.
-func GenerateDockerCompose(name, port, dbPort string) string {
-	if port == "" {
-		port = "8080"
-	}
-	if dbPort == "" {
-		dbPort = "5432"
-	}
+func generateDockerCompose(name, port, dbPort string) string {
 	dbName := strings.ReplaceAll(strings.ToLower(name), " ", "_")
 	svcName := strings.ReplaceAll(strings.ToLower(name), " ", "-")
 
@@ -425,9 +547,11 @@ func GenerateDockerCompose(name, port, dbPort string) string {
       nats:
         condition: service_started
     environment:
-      - DATABASE_DSN=postgres://postgres:postgres@postgres:5432/%s?sslmode=disable
-      - REDIS_ADDR=redis:6379
-      - NATS_URL=nats://nats:4222
+      PAAS_DATABASE_DSN: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-%s}?sslmode=disable
+      PAAS_REDIS_ADDR: redis:6379
+      PAAS_NATS_URL: nats://nats:4222
+      PAAS_AUTH_JWT_SECRET_KEY: ${PAAS_AUTH_JWT_SECRET_KEY:?set PAAS_AUTH_JWT_SECRET_KEY}
+      PAAS_NATS_CONTEXT_AUTH_SECRET: ${PAAS_NATS_CONTEXT_AUTH_SECRET:?set PAAS_NATS_CONTEXT_AUTH_SECRET}
     volumes:
       - ./config.yaml:/app/config.yaml:ro
       - ./locales:/app/locales:ro
@@ -437,16 +561,15 @@ func GenerateDockerCompose(name, port, dbPort string) string {
     image: postgres:17-alpine
     container_name: %s-postgres
     environment:
-      POSTGRES_DB: %s
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ${POSTGRES_DB:-%s}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
     ports:
       - "%s:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./migrations:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -480,11 +603,10 @@ volumes:
 		svcName, svcName)
 }
 
-// GenerateMakefile produces a Makefile with build, run, test, lint, docker, and dev targets.
-func GenerateMakefile(name string) string {
+func generateMakefile(name string) string {
 	binName := strings.ReplaceAll(strings.ToLower(name), " ", "-")
 
-	return fmt.Sprintf(`.PHONY: all build run test lint fmt tidy deps migrate docker-build docker-up docker-down dev clean
+	return fmt.Sprintf(`.PHONY: all build run test lint fmt tidy deps vendor docker-build docker-up docker-down dev clean
 
 # Application
 APP_NAME := %s
@@ -503,7 +625,8 @@ build:
 	$(GO) build $(LDFLAGS) -o $(BINARY) main.go
 
 run: build
-	./$(BINARY) --config config.yaml
+	@test -f .env || (echo ".env is required; copy .env.example and set its values" && exit 1)
+	@set -a; . ./.env; set +a; ./$(BINARY) --config config.yaml
 
 clean:
 	rm -rf bin/ coverage.out coverage.html
@@ -511,14 +634,17 @@ clean:
 ## Development
 
 dev:
-	$(GO) run main.go --config config.yaml
+	@test -f .env || (echo ".env is required; copy .env.example and set its values" && exit 1)
+	@set -a; . ./.env; set +a; $(GO) run main.go --config config.yaml
 
 deps:
-	$(GO) mod download
 	$(GO) mod tidy
 
 tidy:
 	$(GO) mod tidy
+
+vendor: tidy
+	$(GO) mod vendor
 
 fmt:
 	gofumpt -l -w .
@@ -535,135 +661,18 @@ test:
 lint: fmt tidy
 	$(GO) vet ./...
 
-## Database
-
-migrate:
-	@echo "Running seed migrations..."
-	@if command -v psql > /dev/null; then \
-		psql "$$(grep dsn config.yaml | head -1 | awk -F'"' '{print $$2}')" -f migrations/seed.sql; \
-	else \
-		echo "psql not found. Run: docker exec -i %s-postgres psql -U postgres -d %s < migrations/seed.sql"; \
-	fi
-
 ## Docker
 
-docker-build:
+docker-build: vendor
 	docker build -t $(APP_NAME) .
 
-docker-up:
-	docker compose up -d
+docker-up: vendor
+	docker compose up -d --build
 
 docker-down:
 	docker compose down
 
 docker-logs:
 	docker compose logs -f app
-`, binName, binName, strings.ReplaceAll(strings.ToLower(name), " ", "_"))
-}
-
-// EscapeSQLString escapes single quotes for safe SQL interpolation.
-func EscapeSQLString(s string) string {
-	return strings.ReplaceAll(s, "'", "''")
-}
-
-// GenerateSeedData produces SQL seed data with tenant, roles, admin user, and module-specific data.
-func GenerateSeedData(adminEmail, tenantName string, modules []string) string {
-	if adminEmail == "" {
-		adminEmail = "admin@example.com"
-	}
-	if tenantName == "" {
-		tenantName = "Default"
-	}
-
-	safeTenantName := EscapeSQLString(tenantName)
-	safeAdminEmail := EscapeSQLString(adminEmail)
-	safeSlug := EscapeSQLString(strings.ReplaceAll(strings.ToLower(tenantName), " ", "-"))
-
-	var sb strings.Builder
-	sb.WriteString("-- Seed data for initial setup\n")
-	sb.WriteString("-- Generated by platformkit compose.GenerateSeedData\n\n")
-
-	sb.WriteString("BEGIN;\n\n")
-
-	// Default tenant
-	sb.WriteString("-- Default tenant\n")
-	sb.WriteString("INSERT INTO tenants (id, name, slug, status, created_at, updated_at)\n")
-	sb.WriteString("VALUES (\n")
-	sb.WriteString("    '00000000-0000-0000-0000-000000000001',\n")
-	fmt.Fprintf(&sb, "    '%s',\n", safeTenantName)
-	fmt.Fprintf(&sb, "    '%s',\n", safeSlug)
-	sb.WriteString("    'active',\n")
-	sb.WriteString("    NOW(),\n")
-	sb.WriteString("    NOW()\n")
-	sb.WriteString(") ON CONFLICT (id) DO NOTHING;\n\n")
-
-	// Default roles
-	sb.WriteString("-- Default roles\n")
-	for _, role := range []struct{ id, name, desc string }{
-		{"00000000-0000-0000-0000-000000000010", "admin", "Full system administrator"},
-		{"00000000-0000-0000-0000-000000000011", "user", "Standard user"},
-		{"00000000-0000-0000-0000-000000000012", "viewer", "Read-only access"},
-	} {
-		sb.WriteString("INSERT INTO roles (id, name, description, tenant_id, created_at, updated_at)\n")
-		fmt.Fprintf(&sb, "VALUES ('%s', '%s', '%s', '00000000-0000-0000-0000-000000000001', NOW(), NOW())\n", role.id, role.name, role.desc)
-		sb.WriteString("ON CONFLICT (id) DO NOTHING;\n\n")
-	}
-
-	// Default admin user (no password persisted here — the scaffold seeds the
-	// users row only; credentials are provisioned separately via the auth_management
-	// bootstrap, which reads the admin password from environment configuration.)
-	sb.WriteString("-- Default admin user row — authentication credentials are provisioned separately\n")
-	sb.WriteString("-- via the auth_management bootstrap using environment-supplied values.\n")
-	sb.WriteString("INSERT INTO users (id, email, name, status, tenant_id, created_at, updated_at)\n")
-	sb.WriteString("VALUES (\n")
-	sb.WriteString("    '00000000-0000-0000-0000-000000000100',\n")
-	fmt.Fprintf(&sb, "    '%s',\n", safeAdminEmail)
-	sb.WriteString("    'Admin',\n")
-	sb.WriteString("    'active',\n")
-	sb.WriteString("    '00000000-0000-0000-0000-000000000001',\n")
-	sb.WriteString("    NOW(),\n")
-	sb.WriteString("    NOW()\n")
-	sb.WriteString(") ON CONFLICT (id) DO NOTHING;\n\n")
-
-	// Assign admin role
-	sb.WriteString("-- Assign admin role to default user\n")
-	sb.WriteString("INSERT INTO user_roles (user_id, role_id, created_at)\n")
-	sb.WriteString("VALUES ('00000000-0000-0000-0000-000000000100', '00000000-0000-0000-0000-000000000010', NOW())\n")
-	sb.WriteString("ON CONFLICT DO NOTHING;\n\n")
-
-	// Module-specific seed data
-	moduleSet := map[string]bool{}
-	for _, m := range modules {
-		moduleSet[m] = true
-	}
-
-	if moduleSet["billing_management"] {
-		sb.WriteString("-- Billing: Default pricing plans\n")
-		sb.WriteString("INSERT INTO pricing_plans (id, name, slug, price, currency, interval, status, tenant_id, created_at, updated_at)\n")
-		sb.WriteString("VALUES\n")
-		sb.WriteString("    ('00000000-0000-0000-0000-000000000200', 'Free', 'free', 0, 'USD', 'monthly', 'active', '00000000-0000-0000-0000-000000000001', NOW(), NOW()),\n")
-		sb.WriteString("    ('00000000-0000-0000-0000-000000000201', 'Pro', 'pro', 29.00, 'USD', 'monthly', 'active', '00000000-0000-0000-0000-000000000001', NOW(), NOW()),\n")
-		sb.WriteString("    ('00000000-0000-0000-0000-000000000202', 'Enterprise', 'enterprise', 99.00, 'USD', 'monthly', 'active', '00000000-0000-0000-0000-000000000001', NOW(), NOW())\n")
-		sb.WriteString("ON CONFLICT (id) DO NOTHING;\n\n")
-	}
-
-	if moduleSet["api_key_management"] {
-		sb.WriteString("-- API Key Management: Default rate limit policies\n")
-		sb.WriteString("INSERT INTO api_key_policies (id, name, requests_per_minute, requests_per_day, tenant_id, created_at, updated_at)\n")
-		sb.WriteString("VALUES\n")
-		sb.WriteString("    ('00000000-0000-0000-0000-000000000300', 'default', 60, 10000, '00000000-0000-0000-0000-000000000001', NOW(), NOW()),\n")
-		sb.WriteString("    ('00000000-0000-0000-0000-000000000301', 'premium', 300, 100000, '00000000-0000-0000-0000-000000000001', NOW(), NOW())\n")
-		sb.WriteString("ON CONFLICT (id) DO NOTHING;\n\n")
-	}
-
-	if moduleSet["notification_management"] {
-		sb.WriteString("-- Notification Management: Default notification templates\n")
-		sb.WriteString("INSERT INTO notification_templates (id, name, slug, channel, subject, body, tenant_id, created_at, updated_at)\n")
-		sb.WriteString("VALUES\n")
-		sb.WriteString("    ('00000000-0000-0000-0000-000000000400', 'Welcome Email', 'welcome-email', 'email', 'Welcome to {{.AppName}}', 'Hello {{.UserName}}, welcome!', '00000000-0000-0000-0000-000000000001', NOW(), NOW())\n")
-		sb.WriteString("ON CONFLICT (id) DO NOTHING;\n\n")
-	}
-
-	sb.WriteString("COMMIT;\n")
-	return sb.String()
+`, binName)
 }

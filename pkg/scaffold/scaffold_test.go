@@ -11,6 +11,43 @@ import (
 	"testing"
 )
 
+func mustGenerateModule(t *testing.T, opts ModuleOptions) ModuleResult {
+	t.Helper()
+	result, err := GenerateModule(opts)
+	if err != nil {
+		t.Fatalf("GenerateModule: %v", err)
+	}
+	return result
+}
+
+func mustGenerateEntity(t *testing.T, moduleName, entityName string, fields []Field) EntityResult {
+	t.Helper()
+	result, err := GenerateEntity(EntityOptions{
+		ModuleName:        moduleName,
+		Name:              entityName,
+		TableName:         ToSnakeCase(entityName) + "s",
+		Fields:            fields,
+		MigrationSequence: 1,
+	})
+	if err != nil {
+		t.Fatalf("GenerateEntity: %v", err)
+	}
+	return result
+}
+
+func mustGenerateFeature(t *testing.T, moduleName, featureName string, useCases []string) FeatureResult {
+	t.Helper()
+	result, err := GenerateFeature(FeatureOptions{
+		ModuleName: moduleName,
+		Name:       featureName,
+		UseCases:   useCases,
+	})
+	if err != nil {
+		t.Fatalf("GenerateFeature: %v", err)
+	}
+	return result
+}
+
 func TestToPascalCase(t *testing.T) {
 	tests := []struct {
 		input string
@@ -75,8 +112,8 @@ func TestResolveType(t *testing.T) {
 func TestResolveTypeRejectsUnknownName(t *testing.T) {
 	if _, err := ResolveType("unknown"); err == nil {
 		t.Fatal("ResolveType(unknown) should fail")
-	} else if !strings.Contains(err.Error(), "registered types:") {
-		t.Fatalf("ResolveType(unknown) error = %q; want registered type inventory", err)
+	} else if !strings.Contains(err.Error(), "canonical types:") {
+		t.Fatalf("ResolveType(unknown) error = %q; want canonical type inventory", err)
 	}
 }
 
@@ -97,22 +134,21 @@ func TestJSONBTypeUsesNativeRepresentations(t *testing.T) {
 		t.Fatalf("ResolveType(jsonb) = %+v; want native JSON representations", info)
 	}
 
-	result, err := GenerateEntity("content_management", "Document", []Field{{Name: "metadata", Type: "jsonb"}})
-	if err != nil {
-		t.Fatalf("GenerateEntity(jsonb): %v", err)
-	}
+	result := mustGenerateEntity(t, "content_management", "Document", []Field{{Name: "metadata", Type: "jsonb"}})
 	if !strings.Contains(result.Files[0].Content, `"encoding/json"`) || !strings.Contains(result.Files[0].Content, "Metadata json.RawMessage") {
 		t.Fatalf("generated JSONB entity does not use json.RawMessage:\n%s", result.Files[0].Content)
 	}
 }
 
-func TestRegisterTypeRejectsDuplicateOwnership(t *testing.T) {
-	info := TypeInfo{GoType: "money.Amount", GORMType: "numeric", SQLType: "NUMERIC"}
-	if err := RegisterType("money_test", info); err != nil {
-		t.Fatalf("RegisterType first registration: %v", err)
-	}
-	if err := RegisterType("money_test", info); err == nil {
-		t.Fatal("RegisterType duplicate should fail")
+func TestResolveTypeVocabularyIsClosedAndComplete(t *testing.T) {
+	for name := range strings.SplitSeq(canonicalTypeNames, ", ") {
+		info, err := ResolveType(name)
+		if err != nil {
+			t.Fatalf("ResolveType(%q): %v", name, err)
+		}
+		if info.GoType == "" || info.GORMType == "" || info.SQLType == "" || info.E2EValue == "" {
+			t.Errorf("ResolveType(%q) has an incomplete cross-layer contract: %+v", name, info)
+		}
 	}
 }
 
@@ -148,7 +184,7 @@ func TestParseFieldSpec(t *testing.T) {
 }
 
 func TestParseFieldSpecs(t *testing.T) {
-	fields, err := ParseFieldSpecs("amount:decimal,status:string,due_date:datetime")
+	fields, err := ParseFieldSpecs("amount:decimal,status:string,dueDate:datetime")
 	if err != nil {
 		t.Fatalf("ParseFieldSpecs: %v", err)
 	}
@@ -158,7 +194,7 @@ func TestParseFieldSpecs(t *testing.T) {
 	if fields[0].Name != "amount" || fields[0].Type != "decimal" {
 		t.Errorf("fields[0] = %+v", fields[0])
 	}
-	if fields[2].Name != "due_date" || fields[2].Type != "datetime" {
+	if fields[2].Name != "dueDate" || fields[2].Type != "datetime" {
 		t.Errorf("fields[2] = %+v", fields[2])
 	}
 
@@ -173,7 +209,7 @@ func TestParseFieldSpecs(t *testing.T) {
 }
 
 func TestGenerateModule(t *testing.T) {
-	result := GenerateModule(ModuleOptions{
+	result := mustGenerateModule(t, ModuleOptions{
 		Name:        "billing_management",
 		Description: "Billing and subscriptions",
 		Category:    "commerce",
@@ -195,23 +231,31 @@ func TestGenerateModule(t *testing.T) {
 		"authz.go",
 		"contracts/module.go",
 		"contracts/permissions.go",
-		"contracts/providers.go",
 		"contracts/provides/doc.go",
-		"contracts/routes.go",
 		"dependencies.go",
-		"events.go",
 		"features/README.md",
 		"invocations.go",
 		"metadata.go",
 		"migrations/README.md",
 		"module.go",
 		"module_smoke_test.go",
-		"settings_provider.go",
 		"surfaces.go",
 	}
 	for _, name := range expected {
 		if !fileNames[name] {
 			t.Errorf("missing %s", name)
+		}
+	}
+	for _, retired := range []string{
+		"contracts/providers.go",
+		"contracts/routes.go",
+		"events.go",
+		"migrations/001_initial.up.sql",
+		"migrations/001_initial.down.sql",
+		"settings_provider.go",
+	} {
+		if fileNames[retired] {
+			t.Errorf("generated no-op or alias artifact %s", retired)
 		}
 	}
 
@@ -250,7 +294,7 @@ func TestGenerateModuleAppliesImportProfile(t *testing.T) {
 		Ports:           "github.com/acme/platformkit-ports/port",
 	}
 
-	result := GenerateModule(ModuleOptions{
+	result := mustGenerateModule(t, ModuleOptions{
 		Name:          "billing_management",
 		Description:   "Billing and subscriptions",
 		Category:      "commerce",
@@ -280,7 +324,7 @@ func TestGenerateModuleAppliesImportProfile(t *testing.T) {
 }
 
 func TestGenerateModuleEmitsTypedEventContracts(t *testing.T) {
-	result := GenerateModule(ModuleOptions{
+	result := mustGenerateModule(t, ModuleOptions{
 		Name:        "stock_exchange_management",
 		Description: "Market data and investment workflows",
 		Category:    "finance",
@@ -347,10 +391,11 @@ func TestGenerateModuleEmitsTypedEventContracts(t *testing.T) {
 }
 
 func TestGenerateModuleEventIdentifiersAvoidSuffixCollisions(t *testing.T) {
-	result := GenerateModule(ModuleOptions{
-		Name:      "events_management",
-		Events:    []string{"events.foo_bar", "events.foo-bar", "events.foo_bar2"},
-		Archetype: "service",
+	result := mustGenerateModule(t, ModuleOptions{
+		Name:        "events_management",
+		Description: "Event identifier collision coverage",
+		Events:      []string{"events.foo_bar", "events.foo.bar", "events.foo_bar2"},
+		Archetype:   "service",
 	})
 
 	files := make(map[string]string, len(result.Files))
@@ -371,11 +416,12 @@ func TestGenerateModuleEventIdentifiersAvoidSuffixCollisions(t *testing.T) {
 }
 
 func TestGenerateModuleGoFilesParse(t *testing.T) {
-	result := GenerateModule(ModuleOptions{
-		Name:      "stock_exchange_management",
-		Events:    []string{"stock_exchange.order_executed"},
-		Features:  []string{"orders"},
-		Archetype: "service",
+	result := mustGenerateModule(t, ModuleOptions{
+		Name:        "stock_exchange_management",
+		Description: "Stock exchange module",
+		Events:      []string{"stock_exchange.order_executed"},
+		Features:    []string{"orders"},
+		Archetype:   "service",
 	})
 
 	for _, file := range result.Files {
@@ -389,7 +435,7 @@ func TestGenerateModuleGoFilesParse(t *testing.T) {
 }
 
 func TestGenerateModuleRegistryArchetypeOmitsMigrations(t *testing.T) {
-	result := GenerateModule(ModuleOptions{
+	result := mustGenerateModule(t, ModuleOptions{
 		Name:        "translation_management",
 		Description: "Translations",
 		Category:    "localization",
@@ -410,7 +456,7 @@ func TestGenerateModuleRegistryArchetypeOmitsMigrations(t *testing.T) {
 // + three-wrapper boilerplate. This is the tripwire that prevents the
 // scaffold from regressing to the old pattern as the framework evolves.
 func TestGenerateModuleUsesRuntimePattern(t *testing.T) {
-	result := GenerateModule(ModuleOptions{
+	result := mustGenerateModule(t, ModuleOptions{
 		Name:        "billing_management",
 		Description: "Billing and subscriptions",
 		Category:    "commerce",
@@ -461,10 +507,7 @@ func TestGenerateEntity(t *testing.T) {
 		{Name: "amount", Type: "decimal", Description: "Invoice amount", Required: true},
 		{Name: "status", Type: "string", Description: "Invoice status"},
 	}
-	result, err := GenerateEntity("billing_management", "Invoice", fields)
-	if err != nil {
-		t.Fatalf("GenerateEntity: %v", err)
-	}
+	result := mustGenerateEntity(t, "billing_management", "Invoice", fields)
 
 	if result.EntityName != "Invoice" {
 		t.Errorf("EntityName = %q", result.EntityName)
@@ -480,6 +523,9 @@ func TestGenerateEntity(t *testing.T) {
 	}
 	if len(result.Migrations) != 2 {
 		t.Errorf("got %d migrations, want 2", len(result.Migrations))
+	}
+	if result.Migrations[0].Path != "migrations/0001_create_invoices.up.sql" || result.Migrations[1].Path != "migrations/0001_create_invoices.down.sql" {
+		t.Fatalf("migration paths = %q, %q; want explicit four-digit sequence", result.Migrations[0].Path, result.Migrations[1].Path)
 	}
 
 	// Entity code should reference billing_management.
@@ -514,6 +560,13 @@ func TestGenerateEntity(t *testing.T) {
 	if !strings.Contains(result.Migrations[1].Content, "DROP TABLE") {
 		t.Error("migration down should contain DROP TABLE")
 	}
+	for _, permissive := range []string{"IF NOT EXISTS", "IF EXISTS", "OR REPLACE"} {
+		for _, migration := range result.Migrations {
+			if strings.Contains(migration.Content, permissive) {
+				t.Errorf("%s contains permissive migration clause %q", migration.Path, permissive)
+			}
+		}
+	}
 
 	// Register snippet should not be empty.
 	if result.RegisterSnippet == "" {
@@ -522,25 +575,30 @@ func TestGenerateEntity(t *testing.T) {
 }
 
 func TestGenerateFeature(t *testing.T) {
-	result := GenerateFeature("billing_management", "reporting", []string{"GenerateReport", "ExportCSV"})
+	result := mustGenerateFeature(t, "billing_management", "reporting", []string{"GenerateReport", "ExportCSV"})
 
 	if result.FeatureName != "reporting" {
 		t.Errorf("FeatureName = %q", result.FeatureName)
 	}
 
-	// Should have feature.go, handler.go, service.go, feature_test.go, e2e.go, section_renderer.go.
+	// A feature with explicit use cases gets a fail-fast service boundary. Route
+	// handlers are generated only from real route specifications, never as empty
+	// registrars.
 	fileNames := make(map[string]bool)
 	for _, f := range result.Files {
 		fileNames[f.Path] = true
 	}
-	expected := []string{"feature.go", "handler.go", "service.go", "feature_test.go", "e2e.go", "section_renderer.go"}
+	expected := []string{"feature.go", "service.go", "feature_test.go", "e2e.go", "section_renderer.go"}
 	for _, name := range expected {
 		if !fileNames[name] {
 			t.Errorf("missing %s", name)
 		}
 	}
+	if fileNames["handler.go"] {
+		t.Error("feature scaffold emitted an empty route registrar")
+	}
 
-	// Service should contain use case stubs.
+	// Service boundaries must fail explicitly until domain logic is supplied.
 	for _, f := range result.Files {
 		if f.Path == "service.go" {
 			if !strings.Contains(f.Content, "GenerateReport") {
@@ -548,6 +606,14 @@ func TestGenerateFeature(t *testing.T) {
 			}
 			if !strings.Contains(f.Content, "ExportCSV") {
 				t.Error("service.go should contain ExportCSV use case")
+			}
+			for _, canonical := range []string{"errors.ErrUnsupported", "logger is required"} {
+				if !strings.Contains(f.Content, canonical) {
+					t.Errorf("service.go missing fail-fast contract %q", canonical)
+				}
+			}
+			if strings.Contains(f.Content, "return nil\n") {
+				t.Error("service.go reports false success from an unimplemented use case")
 			}
 		}
 		if f.Path == "e2e.go" {
@@ -571,7 +637,13 @@ func TestGenerateFeature(t *testing.T) {
 }
 
 func TestGenerateEntityRejectsUnknownFieldType(t *testing.T) {
-	_, err := GenerateEntity("billing_management", "Invoice", []Field{{Name: "amount", Type: "currency_guess"}})
+	_, err := GenerateEntity(EntityOptions{
+		ModuleName:        "billing_management",
+		Name:              "Invoice",
+		TableName:         "invoices",
+		Fields:            []Field{{Name: "amount", Type: "currency_guess"}},
+		MigrationSequence: 1,
+	})
 	if err == nil {
 		t.Fatal("GenerateEntity should reject an unknown field type")
 	}
@@ -581,10 +653,7 @@ func TestGenerateEntityRejectsUnknownFieldType(t *testing.T) {
 }
 
 func TestGenerateEntityUsesCanonicalAcronymFileNames(t *testing.T) {
-	result, err := GenerateEntity("auth_management", "APIKey", []Field{{Name: "name", Type: "string"}})
-	if err != nil {
-		t.Fatalf("GenerateEntity: %v", err)
-	}
+	result := mustGenerateEntity(t, "auth_management", "APIKey", []Field{{Name: "name", Type: "string"}})
 	if result.Files[0].Path != "api_key.go" || result.Files[1].Path != "api_key_test.go" {
 		t.Fatalf("GenerateEntity APIKey paths = %q, %q; want api_key.go, api_key_test.go", result.Files[0].Path, result.Files[1].Path)
 	}
@@ -593,17 +662,33 @@ func TestGenerateEntityUsesCanonicalAcronymFileNames(t *testing.T) {
 	}
 }
 
+func TestGenerateEntityUsesExplicitIrregularTableName(t *testing.T) {
+	result, err := GenerateEntity(EntityOptions{
+		ModuleName:        "policy_management",
+		Name:              "Policy",
+		TableName:         "policies",
+		Fields:            []Field{{Name: "title", Type: "string"}},
+		MigrationSequence: 27,
+	})
+	if err != nil {
+		t.Fatalf("GenerateEntity: %v", err)
+	}
+	if !strings.Contains(result.Files[0].Content, `return "policies"`) {
+		t.Fatalf("entity ignored explicit table name:\n%s", result.Files[0].Content)
+	}
+	if result.Migrations[0].Path != "migrations/0027_create_policies.up.sql" {
+		t.Fatalf("migration path = %q; want explicit table and sequence", result.Migrations[0].Path)
+	}
+}
+
 func TestGeneratedGoFilesStartWithExactPurposeHeader(t *testing.T) {
-	moduleResult := GenerateModule(ModuleOptions{
+	moduleResult := mustGenerateModule(t, ModuleOptions{
 		Name:        "inventory_management",
 		Description: "Inventory",
 		Features:    []string{"items"},
 	})
-	entityResult, err := GenerateEntity("inventory_management", "Item", []Field{{Name: "name", Type: "string"}})
-	if err != nil {
-		t.Fatalf("GenerateEntity: %v", err)
-	}
-	featureResult := GenerateFeature("inventory_management", "items", []string{"ListItems"})
+	entityResult := mustGenerateEntity(t, "inventory_management", "Item", []Field{{Name: "name", Type: "string"}})
+	featureResult := mustGenerateFeature(t, "inventory_management", "items", []string{"ListItems"})
 
 	files := append([]GeneratedFile{}, moduleResult.Files...)
 	files = append(files, entityResult.Files...)
@@ -642,7 +727,7 @@ func TestGeneratedGoFilesStartWithExactPurposeHeader(t *testing.T) {
 }
 
 func TestGenerateModuleIncludesPlatformVerticalSliceBoundaries(t *testing.T) {
-	result := GenerateModule(ModuleOptions{
+	result := mustGenerateModule(t, ModuleOptions{
 		Name:        "inventory_management",
 		Description: "Inventory",
 		Features:    []string{"items"},
@@ -651,9 +736,14 @@ func TestGenerateModuleIncludesPlatformVerticalSliceBoundaries(t *testing.T) {
 	for _, file := range result.Files {
 		files[file.Path] = file.Content
 	}
-	for _, path := range []string{"transactions.go", "jobs.go", "features/items/service.go", "features/items/handler.go", "features/items/feature.go", "features/items/feature_test.go", "features/items/e2e.go"} {
+	for _, path := range []string{"transactions.go", "jobs.go", "features/items/feature.go", "features/items/feature_test.go", "features/items/e2e.go"} {
 		if files[path] == "" {
 			t.Fatalf("generated module is missing vertical-slice file %q", path)
+		}
+	}
+	for _, noOp := range []string{"features/items/service.go", "features/items/handler.go"} {
+		if files[noOp] != "" {
+			t.Fatalf("generated module contains no-op vertical-slice file %q", noOp)
 		}
 	}
 	if !strings.Contains(files["transactions.go"], "crud.NewUnitOfWork") {

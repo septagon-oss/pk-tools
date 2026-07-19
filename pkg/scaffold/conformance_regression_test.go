@@ -22,7 +22,7 @@ func TestScaffoldedModuleIsBornConformant(t *testing.T) {
 		name = "demo_widget_management"
 		desc = "Demo widgets: gizmos, gadgets, and their lifecycle"
 	)
-	result := GenerateModule(ModuleOptions{
+	result := mustGenerateModule(t, ModuleOptions{
 		Name:        name,
 		Description: desc,
 		Category:    "workspace",
@@ -68,10 +68,9 @@ func TestScaffoldedModuleIsBornConformant(t *testing.T) {
 		t.Errorf("authz.go must not pass contracts.ModulePermissions() into MustNormalizePermissionTokens (analyzer cannot follow a call)")
 	}
 
-	// Invariant #4 — route single source of truth: no EndpointDefinition in contracts.
-	routes := get("contracts/routes.go")
-	if strings.Contains(routes, "EndpointDefinition") || strings.Contains(routes, "ModuleEndpoints") {
-		t.Errorf("contracts/routes.go must not declare EndpointDefinition/ModuleEndpoints; route SoT lives in feature.go")
+	// Invariant #4 — route single source of truth: no alias-only contracts file.
+	if _, exists := files["contracts/routes.go"]; exists {
+		t.Error("scaffold must not generate contracts/routes.go; route truth lives in feature.go")
 	}
 
 	// module.skills.yaml must exist and its metadata.description must EXACTLY match

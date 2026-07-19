@@ -5,10 +5,12 @@
 package scaffold
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Field represents a field definition for entity scaffolding.
@@ -25,6 +27,16 @@ type GeneratedFile struct {
 	Content string `json:"content"`
 }
 
+// WriteOptions is the canonical contract for materializing a generated file
+// set. Existing paths are never replaced and a failed write rolls back files
+// created by the current call.
+type WriteOptions struct {
+	BaseDir string
+	Files   []GeneratedFile
+	DryRun  bool
+	Output  io.Writer
+}
+
 // ModuleResult holds the output of module generation.
 type ModuleResult struct {
 	ModuleName       string            `json:"moduleName"`
@@ -38,8 +50,6 @@ type ModuleOptions struct {
 	Description string   `json:"description"`
 	Category    string   `json:"category"`
 	Archetype   string   `json:"archetype"`
-	Tier        string   `json:"tier"`   // experimental | supported | core-certified
-	Domain      string   `json:"domain"` // identity-access | commerce | content-sites | ...
 	Features    []string `json:"features"`
 	Tags        []string `json:"tags"`
 	Events      []string `json:"events"`     // dot-separated event names emitted by this module
@@ -58,6 +68,16 @@ type EntityResult struct {
 	RegisterSnippet string          `json:"registerSnippet"`
 }
 
+// EntityOptions is the single input contract for entity generation.
+type EntityOptions struct {
+	ModuleName        string        `json:"moduleName"`
+	Name              string        `json:"name"`
+	TableName         string        `json:"tableName"`
+	Fields            []Field       `json:"fields"`
+	MigrationSequence uint          `json:"migrationSequence"`
+	ImportProfile     ImportProfile `json:"-"`
+}
+
 // FeatureResult holds the output of feature generation.
 type FeatureResult struct {
 	FeatureName string          `json:"featureName"`
@@ -65,16 +85,25 @@ type FeatureResult struct {
 	Files       []GeneratedFile `json:"files"`
 }
 
-// GenerateModule creates a complete platformkit module from a
-// ModuleOptions specification. Defaults are applied for empty Category
-// and Archetype so the function is safe to call with a minimal options
-// struct.
-func GenerateModule(opts ModuleOptions) ModuleResult {
+// FeatureOptions is the single input contract for feature generation.
+type FeatureOptions struct {
+	ModuleName    string        `json:"moduleName"`
+	Name          string        `json:"name"`
+	UseCases      []string      `json:"useCases"`
+	ImportProfile ImportProfile `json:"-"`
+}
+
+// GenerateModule creates a complete platformkit module from one validated
+// ModuleOptions contract.
+func GenerateModule(opts ModuleOptions) (ModuleResult, error) {
 	if opts.Category == "" {
 		opts.Category = "business"
 	}
 	if opts.Archetype == "" {
 		opts.Archetype = "service"
+	}
+	if err := validateModuleOptions(opts); err != nil {
+		return ModuleResult{}, err
 	}
 
 	files := applyImportProfileToFiles(normalizeGeneratedGoFiles(generateModuleFiles(opts)), opts.ImportProfile)
@@ -84,26 +113,24 @@ func GenerateModule(opts ModuleOptions) ModuleResult {
 		ModuleName:       opts.Name,
 		Files:            files,
 		RegistrationCode: regCode,
-	}
+	}, nil
 }
 
-// GenerateEntity creates an entity with BaseEntity, MCP interfaces, tests, and migrations.
-func GenerateEntity(moduleName, entityName string, fields []Field) (EntityResult, error) {
-	return GenerateEntityWithProfile(moduleName, entityName, fields, ImportProfile{})
-}
-
-// GenerateEntityWithProfile creates an entity and rewrites generated imports
-// using the supplied workspace profile.
-func GenerateEntityWithProfile(moduleName, entityName string, fields []Field, profile ImportProfile) (EntityResult, error) {
-	code, err := generateEntityCode(moduleName, entityName, fields)
-	if err != nil {
-		return EntityResult{}, fmt.Errorf("generate entity %s: %w", entityName, err)
+// GenerateEntity creates an entity with BaseEntity, MCP interfaces, tests, and
+// an explicitly sequenced append-only migration pair.
+func GenerateEntity(opts EntityOptions) (EntityResult, error) {
+	if err := validateEntityOptions(opts); err != nil {
+		return EntityResult{}, err
 	}
-	testCode := generateEntityTestCode(moduleName, entityName, fields)
-	e2eCode := generateEntityE2ECode(moduleName, entityName, fields)
-	migUp, migDown, err := generateMigrationCode(moduleName, entityName, fields)
+	code, err := generateEntityCode(opts.ModuleName, opts.Name, opts.TableName, opts.Fields)
 	if err != nil {
-		return EntityResult{}, fmt.Errorf("generate entity %s migration: %w", entityName, err)
+		return EntityResult{}, fmt.Errorf("generate entity %s: %w", opts.Name, err)
+	}
+	testCode := generateEntityTestCode(opts.ModuleName, opts.Name, opts.TableName, opts.Fields)
+	e2eCode := generateEntityE2ECode(opts.ModuleName, opts.Name, opts.TableName, opts.Fields)
+	migUp, migDown, err := generateMigrationCode(opts.ModuleName, opts.TableName, opts.Fields)
+	if err != nil {
+		return EntityResult{}, fmt.Errorf("generate entity %s migration: %w", opts.Name, err)
 	}
 
 	registerSnippet := fmt.Sprintf(
@@ -111,40 +138,39 @@ func GenerateEntityWithProfile(moduleName, entityName string, fields []Field, pr
     Name:      %q,
     EnableMCP: true,
 })`,
-		entityName, entityName,
+		opts.Name, opts.Name,
 	)
 
+	snakeName := ToSnakeCase(opts.Name)
 	files := applyImportProfileToFiles(normalizeGeneratedGoFiles([]GeneratedFile{
-		{Path: ToSnakeCase(entityName) + ".go", Content: code},
-		{Path: ToSnakeCase(entityName) + "_test.go", Content: testCode},
-		{Path: ToSnakeCase(entityName) + "_e2e.go", Content: e2eCode},
-	}), profile)
+		{Path: snakeName + ".go", Content: code},
+		{Path: snakeName + "_test.go", Content: testCode},
+		{Path: snakeName + "_e2e.go", Content: e2eCode},
+	}), opts.ImportProfile)
+	migrationPrefix := fmt.Sprintf("%04d_create_%s", opts.MigrationSequence, opts.TableName)
 	migrations := applyImportProfileToFiles([]GeneratedFile{
-		{Path: fmt.Sprintf("migrations/001_create_%s.up.sql", ToSnakeCase(entityName)+"s"), Content: migUp},
-		{Path: fmt.Sprintf("migrations/001_create_%s.down.sql", ToSnakeCase(entityName)+"s"), Content: migDown},
-	}, profile)
+		{Path: "migrations/" + migrationPrefix + ".up.sql", Content: migUp},
+		{Path: "migrations/" + migrationPrefix + ".down.sql", Content: migDown},
+	}, opts.ImportProfile)
 
 	return EntityResult{
-		EntityName:      entityName,
-		ModuleName:      moduleName,
+		EntityName:      opts.Name,
+		ModuleName:      opts.ModuleName,
 		Files:           files,
 		Migrations:      migrations,
-		RegisterSnippet: applyImportProfile(registerSnippet, profile),
+		RegisterSnippet: applyImportProfile(registerSnippet, opts.ImportProfile),
 	}, nil
 }
 
-// GenerateFeature creates a feature with FeatureBuilder, handler, service, tests, and renderer.
-func GenerateFeature(moduleName, featureName string, useCases []string) FeatureResult {
-	return GenerateFeatureWithProfile(moduleName, featureName, useCases, ImportProfile{})
-}
-
-// GenerateFeatureWithProfile creates a feature and rewrites generated imports
-// using the supplied workspace profile.
-func GenerateFeatureWithProfile(moduleName, featureName string, useCases []string, profile ImportProfile) FeatureResult {
-	files := generateFeatureFiles(moduleName, featureName, useCases)
-	testFile := generateFeatureTestCode(moduleName, featureName)
-	e2eFile := generateFeatureE2ECode(moduleName, featureName)
-	rendererFile := generateSectionRendererCode(moduleName, featureName)
+// GenerateFeature creates one validated FeatureBuilder-based vertical slice.
+func GenerateFeature(opts FeatureOptions) (FeatureResult, error) {
+	if err := validateFeatureOptions(opts); err != nil {
+		return FeatureResult{}, err
+	}
+	files := generateFeatureFiles(opts.ModuleName, opts.Name, opts.UseCases)
+	testFile := generateFeatureTestCode(opts.ModuleName, opts.Name)
+	e2eFile := generateFeatureE2ECode(opts.ModuleName, opts.Name)
+	rendererFile := generateSectionRendererCode(opts.ModuleName, opts.Name)
 	files = append(
 		files,
 		GeneratedFile{Path: "feature_test.go", Content: testFile},
@@ -152,20 +178,54 @@ func GenerateFeatureWithProfile(moduleName, featureName string, useCases []strin
 		GeneratedFile{Path: "section_renderer.go", Content: rendererFile},
 	)
 	return FeatureResult{
-		FeatureName: featureName,
-		ModuleName:  moduleName,
-		Files:       applyImportProfileToFiles(normalizeGeneratedGoFiles(files), profile),
-	}
+		FeatureName: opts.Name,
+		ModuleName:  opts.ModuleName,
+		Files:       applyImportProfileToFiles(normalizeGeneratedGoFiles(files), opts.ImportProfile),
+	}, nil
 }
 
-// WriteFiles writes a slice of GeneratedFile to disk under the given base directory.
-// If dryRun is true, it prints what would be written without creating files.
-func WriteFiles(baseDir string, files []GeneratedFile, dryRun bool, output io.Writer) error {
-	for _, f := range files {
-		fullPath := filepath.Join(baseDir, f.Path)
-		if dryRun {
-			if output != nil {
-				if _, err := fmt.Fprintf(output, "  [dry-run] %s (%d bytes)\n", fullPath, len(f.Content)); err != nil {
+// WriteFiles validates and materializes one complete generated file set.
+func WriteFiles(opts WriteOptions) error {
+	if opts.BaseDir == "" {
+		return fmt.Errorf("base directory is required")
+	}
+	if len(opts.Files) == 0 {
+		return fmt.Errorf("at least one generated file is required")
+	}
+	basePath, err := filepath.Abs(opts.BaseDir)
+	if err != nil {
+		return fmt.Errorf("resolve base directory %q: %w", opts.BaseDir, err)
+	}
+	fullPaths := make([]string, len(opts.Files))
+	seen := make(map[string]struct{}, len(opts.Files))
+	for i, f := range opts.Files {
+		if !filepath.IsLocal(f.Path) || filepath.Clean(f.Path) != f.Path || f.Path == "." {
+			return fmt.Errorf("generated file path %q must be a canonical relative path", f.Path)
+		}
+		if _, duplicate := seen[f.Path]; duplicate {
+			return fmt.Errorf("duplicate generated file path %q", f.Path)
+		}
+		seen[f.Path] = struct{}{}
+		fullPaths[i] = filepath.Join(basePath, f.Path)
+		if err := validateGeneratedParent(basePath, f.Path); err != nil {
+			return err
+		}
+		if opts.DryRun {
+			continue
+		}
+		if _, statErr := os.Lstat(fullPaths[i]); statErr == nil {
+			return fmt.Errorf("refusing to overwrite existing path %s", fullPaths[i])
+		} else if !os.IsNotExist(statErr) {
+			return fmt.Errorf("inspect output path %s: %w", fullPaths[i], statErr)
+		}
+	}
+
+	created := make([]string, 0, len(opts.Files))
+	for i, f := range opts.Files {
+		fullPath := fullPaths[i]
+		if opts.DryRun {
+			if opts.Output != nil {
+				if _, err := fmt.Fprintf(opts.Output, "  [dry-run] %s (%d bytes)\n", fullPath, len(f.Content)); err != nil {
 					return fmt.Errorf("write dry-run output for %s: %w", fullPath, err)
 				}
 			}
@@ -174,17 +234,73 @@ func WriteFiles(baseDir string, files []GeneratedFile, dryRun bool, output io.Wr
 
 		dir := filepath.Dir(fullPath)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return fmt.Errorf("create directory %s: %w", dir, err)
+			return rollbackGeneratedFiles(fmt.Errorf("create directory %s: %w", dir, err), created)
 		}
 
-		if err := os.WriteFile(fullPath, []byte(f.Content), 0o644); err != nil {
-			return fmt.Errorf("write file %s: %w", fullPath, err)
+		file, err := os.OpenFile(fullPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if err != nil {
+			return rollbackGeneratedFiles(fmt.Errorf("create file %s: %w", fullPath, err), created)
 		}
-		if output != nil {
-			if _, err := fmt.Fprintf(output, "  created %s\n", fullPath); err != nil {
-				return fmt.Errorf("write output for %s: %w", fullPath, err)
+		created = append(created, fullPath)
+		if _, err := io.WriteString(file, f.Content); err != nil {
+			_ = file.Close()
+			return rollbackGeneratedFiles(fmt.Errorf("write file %s: %w", fullPath, err), created)
+		}
+		if err := file.Close(); err != nil {
+			return rollbackGeneratedFiles(fmt.Errorf("close file %s: %w", fullPath, err), created)
+		}
+		if opts.Output != nil {
+			if _, err := fmt.Fprintf(opts.Output, "  created %s\n", fullPath); err != nil {
+				return rollbackGeneratedFiles(fmt.Errorf("write output for %s: %w", fullPath, err), created)
 			}
 		}
 	}
 	return nil
+}
+
+func validateGeneratedParent(basePath, relativePath string) error {
+	baseInfo, err := os.Lstat(basePath)
+	if err == nil {
+		if baseInfo.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("base directory %s must not be a symbolic link", basePath)
+		}
+		if !baseInfo.IsDir() {
+			return fmt.Errorf("base path %s is not a directory", basePath)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("inspect base directory %s: %w", basePath, err)
+	}
+
+	current := basePath
+	parent := filepath.Dir(relativePath)
+	if parent == "." {
+		return nil
+	}
+	for _, component := range strings.Split(parent, string(os.PathSeparator)) {
+		current = filepath.Join(current, component)
+		info, err := os.Lstat(current)
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("inspect generated output parent %s: %w", current, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("generated output parent %s must not be a symbolic link", current)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("generated output parent %s is not a directory", current)
+		}
+	}
+	return nil
+}
+
+func rollbackGeneratedFiles(cause error, paths []string) error {
+	errs := []error{cause}
+	for i := len(paths) - 1; i >= 0; i-- {
+		if err := os.Remove(paths[i]); err != nil && !os.IsNotExist(err) {
+			errs = append(errs, fmt.Errorf("roll back generated file %s: %w", paths[i], err))
+		}
+	}
+	return errors.Join(errs...)
 }

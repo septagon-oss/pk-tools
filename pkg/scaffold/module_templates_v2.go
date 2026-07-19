@@ -68,8 +68,6 @@ func generateModuleFiles(opts ModuleOptions) []GeneratedFile {
 	description := opts.Description
 	category := opts.Category
 	archetype := opts.Archetype
-	tier := opts.Tier
-	domain := opts.Domain
 	features := opts.Features
 	tags := opts.Tags
 	events := opts.Events
@@ -92,12 +90,10 @@ func generateModuleFiles(opts ModuleOptions) []GeneratedFile {
 		{Path: "module.go", Content: renderModuleGo(name, description, category, pascalName, moduleTags, archetype)},
 		{Path: "transactions.go", Content: renderModuleTransactionsGo(name)},
 		{Path: "jobs.go", Content: renderModuleJobsGo(name)},
-		{Path: "metadata.go", Content: renderModuleMetadataGo(name, moduleFeatures)},
+		{Path: "metadata.go", Content: renderModuleMetadataGo(name, moduleFeatures, len(moduleEvents) > 0)},
 		{Path: "dependencies.go", Content: renderModuleDependenciesGo(name, modulePorts)},
-		{Path: "events.go", Content: renderModuleEventsGo(name, moduleEvents)},
 		{Path: "invocations.go", Content: renderModuleInvocationsGo(name, pascalName)},
 		{Path: "surfaces.go", Content: renderModuleSurfacesGo(name, displayName, pascalName, resourceKebab)},
-		{Path: "settings_provider.go", Content: renderModuleSettingsProviderGo(name)},
 		{Path: "authz.go", Content: renderModuleAuthzGo(name)},
 		{Path: "entity_permissions.go", Content: renderModuleEntityPermissionsGo(name)},
 		{Path: "README.md", Content: renderModuleReadme(name, description, category, archetype, moduleTags, moduleFeatures)},
@@ -105,16 +101,14 @@ func generateModuleFiles(opts ModuleOptions) []GeneratedFile {
 		{Path: "module.manifest.yaml", Content: renderModuleManifestYAML(name, description, category, resourceName, moduleTags, moduleFeatures, moduleEvents, modulePorts)},
 		{Path: "module.skills.yaml", Content: renderModuleSkillsYAML(name, description, moduleTags)},
 		{Path: "contracts/module.go", Content: renderModuleContractsGo(name, description, category, moduleTags)},
-		{Path: "contracts/providers.go", Content: renderModuleProvidersGo(name)},
 		{Path: "contracts/permissions.go", Content: renderModulePermissionsGo(name, pascalName)},
-		{Path: "contracts/routes.go", Content: renderModuleRoutesGo(name)},
 		{Path: "contracts/provides/doc.go", Content: renderProvidesDocGo(name)},
 	}
 	if len(moduleEvents) > 0 {
-		files = append(files, GeneratedFile{
-			Path:    "contracts/events.go",
-			Content: renderModuleEventContractsGo(moduleEvents),
-		})
+		files = append(files,
+			GeneratedFile{Path: "events.go", Content: renderModuleEventsGo(name, moduleEvents)},
+			GeneratedFile{Path: "contracts/events.go", Content: renderModuleEventContractsGo(moduleEvents)},
+		)
 	}
 
 	if archetype != "infrastructure" {
@@ -125,12 +119,7 @@ func generateModuleFiles(opts ModuleOptions) []GeneratedFile {
 	}
 
 	if needsModuleMigrations(archetype) {
-		files = append(
-			files,
-			GeneratedFile{Path: "migrations/README.md", Content: renderMigrationsReadme(name)},
-			GeneratedFile{Path: "migrations/001_initial.up.sql", Content: renderInitialMigrationUp(name)},
-			GeneratedFile{Path: "migrations/001_initial.down.sql", Content: renderInitialMigrationDown(name)},
-		)
+		files = append(files, GeneratedFile{Path: "migrations/README.md", Content: renderMigrationsReadme(name)})
 	}
 
 	if opts.WithAssets {
@@ -146,14 +135,6 @@ func generateModuleFiles(opts ModuleOptions) []GeneratedFile {
 			GeneratedFile{Path: "browser/js/" + resourceName + "_viewer.js", Content: renderPlaceholderBrowserJS(name, resourceName)},
 		)
 	}
-
-	// Catalog hints: record what the operator must register in catalog/.
-	// We surface this through registration code in ModuleResult, not as a
-	// file in the new module directory, so we don't need to emit anything
-	// here. Tier/domain are surfaced through module.manifest.yaml and
-	// must be mirrored into module_contracts.yaml by the operator.
-	_ = tier
-	_ = domain
 
 	for _, featureName := range moduleFeatures {
 		featureFiles := generateFeatureFiles(name, featureName, nil)
@@ -524,7 +505,7 @@ var (
 `, name, header, joinImports(imports), name, description, moduleResourceName(name), category, tagLiterals, pascalName, pascalName, pascalName, migrationsBlock, pascalName, pascalName, pascalName, name, name)
 }
 
-func renderModuleMetadataGo(name string, features []string) string {
+func renderModuleMetadataGo(name string, features []string, hasEvents bool) string {
 	imports := []string{
 		`"example.com/platformkit/backend-kit/app/module"`,
 		`"example.com/platformkit/backend-kit/app/module/providers/standard"`,
@@ -557,6 +538,10 @@ func renderModuleMetadataGo(name string, features []string) string {
 	}
 
 	header := filePurposeHeader("metadata.go", "module metadata projection and composer options", "ADR-0017")
+	eventBlock := ""
+	if hasEvents {
+		eventBlock = "\toptions = append(options, moduleEventOptions()...)\n"
+	}
 
 	return fmt.Sprintf(`package %s
 
@@ -582,10 +567,9 @@ func moduleComposerOptions() []standard.ComposerOption {
 	options := []standard.ComposerOption{
 %s	}
 	options = append(options, moduleDependencyOptions()...)
-	options = append(options, moduleEventOptions()...)
-	return options
+%s	return options
 }
-`, name, header, joinImports(imports), featureBlock)
+`, name, header, joinImports(imports), featureBlock, eventBlock)
 }
 
 func renderModuleDependenciesGo(name string, extraPorts []string) string {
@@ -602,7 +586,7 @@ func renderModuleDependenciesGo(name string, extraPorts []string) string {
 
 	// Extra ports the operator declared on the command line.
 	for _, p := range extraPorts {
-		b.WriteString(fmt.Sprintf(`		standard.WithDep(module.OptionalPort[ports.%s](module.PortSpec{Purpose: "TODO: describe why %s needs ports.%s", Category: module.DependencyCategoryData, SubCategory: %q, PreferredProvider: "TODO_provider_module"})),`, p, name, p, strings.ToLower(p)))
+		b.WriteString(fmt.Sprintf(`		standard.WithDep(module.OptionalPort[ports.%s](module.PortSpec{Purpose: %q, Category: module.DependencyCategoryData, SubCategory: %q})),`, p, moduleDisplayName(name)+" integration through ports."+p, ToSnakeCase(p)))
 		b.WriteString("\n")
 	}
 
@@ -631,23 +615,6 @@ func moduleDependencyOptions() []standard.ComposerOption {
 
 func renderModuleEventsGo(name string, events []string) string {
 	header := filePurposeHeader("events.go", "declared event contracts emitted by this module", "ADR-0018")
-
-	if len(events) == 0 {
-		// No declared events — emit a function returning nil so it composes
-		// cleanly into moduleComposerOptions. The typed contract file is only
-		// generated when the module has an event surface.
-		return fmt.Sprintf(`package %s
-
-%s
-import "example.com/platformkit/backend-kit/app/module/providers/standard"
-
-	// moduleEventOptions returns the typed event contracts this module emits.
-	// Add new events in contracts/events.go and keep their payloads versioned.
-	func moduleEventOptions() []standard.ComposerOption {
-		return nil
-}
-`, name, header)
-	}
 
 	var b strings.Builder
 	identifiers := uniqueEventIdentifiers(events)
@@ -696,7 +663,7 @@ var %s = port.Event[%sPayload]{
 	Durability: port.EventDurabilityDurable,
 }
 
-`, identifier, evt, identifier, identifier, evt, identifier, identifier, evt, fmt.Sprintf("TODO: describe %s", evt)))
+`, identifier, evt, identifier, identifier, evt, identifier, identifier, evt, "Durable contract for "+evt+"."))
 	}
 
 	return fmt.Sprintf(`package contracts
@@ -786,7 +753,7 @@ func moduleSurfaceContribution() portsurface.Contribution {
 				Icon:           "box",
 				Order:          100,
 				PagePattern:    portsurface.PagePatternUnknown,
-				CapabilityTags: []string{contracts.Permission%sView},
+				CapabilityTags: []string{contracts.Permission%sRead},
 				Targets:        []portsurface.Target{portsurface.TargetAdmin},
 			},
 		},
@@ -823,18 +790,6 @@ var _ ports.ModuleSurfaceContributionProvider = (*%sSurfaceContributionProvider)
 		pascalName,
 		pascalName,
 	)
-}
-
-func renderModuleSettingsProviderGo(name string) string {
-	header := filePurposeHeader("settings_provider.go", "settings retirement stub (post registrar finale)", "ADR-0001")
-
-	// The ports.SettingsProvider / ports.SettingDefinition god surface was
-	// deleted with the legacy registrars (ADR-0001). Module settings, when
-	// needed, are contributed through the registrar-less settings path; this
-	// file is a placeholder so the package keeps a stable settings home.
-	return fmt.Sprintf(`package %s
-
-%s`, name, header)
 }
 
 func renderModuleAuthzGo(name string) string {
@@ -891,7 +846,7 @@ func EntityReadPermissionsProvider() any {
 		fx.ResultTags(`+"`"+`group:"entity_permissions"`+"`"+`),
 	)
 }
-`, name, header, moduleResourceName(name))
+`, name, header, name)
 }
 
 func renderModuleReadme(name, description, category, archetype string, tags, features []string) string {
@@ -995,20 +950,6 @@ var ModuleTags = []string{%s}
 `, header, name, description, moduleResourceName(name), category, quoteList(tags))
 }
 
-func renderModuleProvidersGo(name string) string {
-	header := filePurposeHeader("providers.go", "type aliases re-exporting provider-side contracts", "ADR-0009")
-
-	return fmt.Sprintf(`package contracts
-
-%s
-// Provider-side aliases belong here once %s exposes stable contracts from
-// contracts/provides/.
-//
-// Example:
-// type Service = provides.%sService
-`, header, name, ToPascalCase(name))
-}
-
 func renderModulePermissionsGo(name, pascalName string) string {
 	header := filePurposeHeader("permissions.go", "permission token constants exposed by this module", "ADR-0009")
 
@@ -1016,35 +957,19 @@ func renderModulePermissionsGo(name, pascalName string) string {
 
 %s
 const (
-	Permission%sView   = %q
+	Permission%sRead   = %q
 	Permission%sManage = %q
 )
 
-// ModulePermissions lists the module's tokens in canonical [view, manage] order,
+// ModulePermissions lists the module's tokens in canonical [read, manage] order,
 // matching authz.ModulePermissionTokens and the module.manifest.yaml permissions.
 func ModulePermissions() []string {
 	return []string{
-		Permission%sView,
+		Permission%sRead,
 		Permission%sManage,
 	}
 }
 `, header, pascalName, name+":read", pascalName, name+":manage", pascalName, pascalName)
-}
-
-func renderModuleRoutesGo(name string) string {
-	header := filePurposeHeader("routes.go", "route-level constants exposed for cross-module reference", "ADR-0009")
-
-	// NOTE: no ModuleEndpoints()/[]module.EndpointDefinition here. The feature-route
-	// single-source-of-truth invariant (#4) requires EndpointDefinition declarations
-	// to live ONLY in feature.go (via FeatureBuilder). Emitting them in contracts/
-	// fails `+"`"+`make check-features`+"`"+` / module-contract-check for supported+ tiers.
-	return fmt.Sprintf(`package contracts
-
-%s
-const (
-	ModuleAPIBasePath = ModuleBasePath
-)
-`, header)
 }
 
 func renderProvidesDocGo(name string) string {
@@ -1132,7 +1057,7 @@ func renderModuleManifestYAML(name, description, category, resourceName string, 
 	b.WriteString("    optional:\n")
 	for _, p := range ports {
 		b.WriteString("      - interface: ports." + p + "\n")
-		b.WriteString("        description: TODO describe why " + name + " needs ports." + p + "\n")
+		b.WriteString("        description: " + yamlString(moduleDisplayName(name)+" integration through ports."+p) + "\n")
 		b.WriteString("        version: \"*\"\n")
 	}
 	if len(features) > 0 {
@@ -1140,7 +1065,7 @@ func renderModuleManifestYAML(name, description, category, resourceName string, 
 		for _, f := range features {
 			b.WriteString("    - id: " + f + "\n")
 			b.WriteString("      name: " + moduleDisplayName(f) + "\n")
-			b.WriteString("      description: TODO describe the " + f + " feature\n")
+			b.WriteString("      description: " + yamlString(moduleDisplayName(f)+" feature for "+name+".") + "\n")
 			b.WriteString("      version: 0.1.0\n")
 			b.WriteString("      category: " + category + "\n")
 			b.WriteString("      enabled: true\n")
@@ -1152,7 +1077,7 @@ func renderModuleManifestYAML(name, description, category, resourceName string, 
 		b.WriteString("  events:\n")
 		for _, e := range events {
 			b.WriteString("    - name: " + e + "\n")
-			b.WriteString("      description: TODO describe " + e + "\n")
+			b.WriteString("      description: " + yamlString("Durable contract for "+e+".") + "\n")
 			b.WriteString("      durability: durable\n")
 		}
 	} else {
@@ -1192,26 +1117,6 @@ func yamlString(s string) string {
 		}
 	}
 	return s
-}
-
-func renderInitialMigrationUp(name string) string {
-	return fmt.Sprintf(`-- +goose Up
--- 001_initial.up.sql — initial schema for %s.
---
--- Replace this stub with the real CREATE TABLE statements when you add
--- entities. Every table this module owns must include tenant_id and the
--- standard audit columns (created_at, updated_at, deleted_at). Migrations
--- are append-only: never edit a committed migration; add a new one with
--- a higher sequence number.
-`, name)
-}
-
-func renderInitialMigrationDown(name string) string {
-	return fmt.Sprintf(`-- +goose Down
--- 001_initial.down.sql — inverse of 001_initial.up.sql for %s.
---
--- Mirror the destructive inverse of the up migration here.
-`, name)
 }
 
 func renderAssetsEmbedGo(name string) string {
@@ -1323,11 +1228,10 @@ Wire new feature constructors into `+"`metadata.go`"+` via `+"`standard.WithFeat
 func renderMigrationsReadme(name string) string {
 	return fmt.Sprintf(`# %s migrations
 
-Store append-only Goose migrations here using `+"`NNN_name.up.sql`"+` and
-`+"`NNN_name.down.sql`"+` pairs. The initial stub lives in `+"`001_initial.up.sql`"+`
-and `+"`001_initial.down.sql`"+` — replace it with real CREATE TABLE statements
-when you add entities. Never edit committed migrations; add new ones
-with higher sequence numbers.
+Store append-only Goose migrations here using `+"`NNNN_name.up.sql`"+` and
+`+"`NNNN_name.down.sql`"+` pairs. Generate the first real entity migration with
+an explicit sequence; never reserve a number with an empty migration and never
+edit a committed migration.
 `, name)
 }
 

@@ -11,10 +11,12 @@ import (
 
 // E2EFlowOptions is the canonical input for a module-owned CRUD flow suite.
 type E2EFlowOptions struct {
-	ModuleName string  `json:"moduleName"`
-	Feature    string  `json:"feature"`
-	EntityName string  `json:"entityName"`
-	Fields     []Field `json:"fields"`
+	ModuleName    string        `json:"moduleName"`
+	Feature       string        `json:"feature"`
+	EntityName    string        `json:"entityName"`
+	TableName     string        `json:"tableName"`
+	Fields        []Field       `json:"fields"`
+	ImportProfile ImportProfile `json:"-"`
 }
 
 // E2EFlowResult contains the module-owned flow definition and runner.
@@ -28,31 +30,18 @@ type E2EFlowResult struct {
 // suites expose Flows and use the shared e2eflow runner; init registration and
 // application-specific test harness imports are intentionally unsupported.
 func GenerateE2EFlow(opts E2EFlowOptions) (E2EFlowResult, error) {
-	return GenerateE2EFlowWithProfile(opts, ImportProfile{})
-}
-
-// GenerateE2EFlowWithProfile emits a flow suite using the supplied workspace
-// import roots.
-func GenerateE2EFlowWithProfile(opts E2EFlowOptions, profile ImportProfile) (E2EFlowResult, error) {
-	if strings.TrimSpace(opts.ModuleName) == "" {
-		return E2EFlowResult{}, fmt.Errorf("module name is required")
+	if err := validateE2EFlowOptions(opts); err != nil {
+		return E2EFlowResult{}, err
 	}
-	if strings.TrimSpace(opts.Feature) == "" {
-		return E2EFlowResult{}, fmt.Errorf("feature name is required")
-	}
-	if strings.TrimSpace(opts.EntityName) == "" {
-		return E2EFlowResult{}, fmt.Errorf("entity name is required")
-	}
-	for _, field := range opts.Fields {
-		if _, err := ResolveType(field.Type); err != nil {
-			return E2EFlowResult{}, fmt.Errorf("field %q: %w", field.Name, err)
-		}
+	flowCode, err := generateE2EFlowsCode(opts)
+	if err != nil {
+		return E2EFlowResult{}, err
 	}
 
 	files := applyImportProfileToFiles(normalizeGeneratedGoFiles([]GeneratedFile{
-		{Path: "flows.go", Content: generateE2EFlowsCode(opts)},
+		{Path: "flows.go", Content: flowCode},
 		{Path: "flows_test.go", Content: generateE2EFlowsTestCode()},
-	}), profile)
+	}), opts.ImportProfile)
 	return E2EFlowResult{
 		ModuleName: opts.ModuleName,
 		Feature:    opts.Feature,
@@ -60,20 +49,24 @@ func GenerateE2EFlowWithProfile(opts E2EFlowOptions, profile ImportProfile) (E2E
 	}, nil
 }
 
-func generateE2EFlowsCode(opts E2EFlowOptions) string {
+func generateE2EFlowsCode(opts E2EFlowOptions) (string, error) {
 	entity := ToSnakeCase(opts.EntityName)
-	plural := entity + "s"
+	plural := opts.TableName
 	namespace := strings.TrimSuffix(opts.ModuleName, "_management")
 	adminPath := "/admin/" + strings.ReplaceAll(namespace, "_", "-") + "/" + plural
 	pageSelector := fmt.Sprintf(`[data-page="%s"], [data-entity="%s"]`, plural, entity)
 
 	var fillSteps strings.Builder
 	for _, field := range opts.Fields {
+		typeInfo, err := ResolveType(field.Type)
+		if err != nil {
+			return "", fmt.Errorf("field %q: %w", field.Name, err)
+		}
 		fmt.Fprintf(
 			&fillSteps,
 			"\n\t\t\t\tflow.Fill(%q, %q),",
 			fmt.Sprintf(`input[name="%s"], select[name="%s"], textarea[name="%s"]`, field.Name, field.Name, field.Name),
-			e2eFieldValue(field.Type),
+			typeInfo.E2EValue,
 		)
 	}
 
@@ -137,7 +130,7 @@ func Flows() []flow.FlowSpec {
 		fillSteps.String(),
 		`button[type="submit"]`,
 		pageSelector,
-	)
+	), nil
 }
 
 func generateE2EFlowsTestCode() string {
@@ -155,27 +148,4 @@ func TestFlows(t *testing.T) {
 	e2eflow.RunFlows(t, Flows())
 }
 `
-}
-
-func e2eFieldValue(fieldType string) string {
-	switch fieldType {
-	case "string":
-		return "Test Value"
-	case "text":
-		return "Test description text"
-	case "integer":
-		return "42"
-	case "decimal":
-		return "99.99"
-	case "boolean":
-		return "true"
-	case "datetime":
-		return "2026-01-15T10:00:00Z"
-	case "uuid":
-		return "00000000-0000-0000-0000-000000000001"
-	case "jsonb":
-		return `{"test":true}`
-	default:
-		panic("unregistered scaffold field type reached E2E generation: " + fieldType)
-	}
 }

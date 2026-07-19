@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"strings"
 	"unicode"
-
-	"github.com/septagon-oss/pk-core/pkg/registry"
 )
 
 func normalizeGeneratedGoFiles(files []GeneratedFile) []GeneratedFile {
@@ -83,70 +81,40 @@ func ToSnakeCase(s string) string {
 	return result.String()
 }
 
-// TypeInfo describes a scaffold field type with all its representations.
-// Register custom types via RegisterType to extend the scaffold system.
+// TypeInfo describes one canonical scaffold field type across generated layers.
 type TypeInfo struct {
-	GoType    string // Go type string, e.g. "string", "int64", "time.Time"
-	GORMType  string // GORM column type, e.g. "varchar(255)", "bigint"
-	SQLType   string // PostgreSQL type, e.g. "VARCHAR(255)", "INTEGER"
-	IsNumeric bool   // Whether this type uses numeric query operators
+	GoType    string
+	GORMType  string
+	SQLType   string
+	E2EValue  string
+	IsNumeric bool
 }
 
-var typeRegistry = registry.New[string, TypeInfo]()
+const canonicalTypeNames = "boolean, datetime, decimal, integer, jsonb, string, text, uuid"
 
-// RegisterType registers a field type with all its representations.
-// Multiple aliases can map to the same TypeInfo by calling this for each alias.
-// Duplicate names are rejected so one type name always has one owner.
-func RegisterType(name string, info TypeInfo) error {
-	if name == "" {
-		return fmt.Errorf("scaffold type name is required")
-	}
-	if name != strings.TrimSpace(name) || name != strings.ToLower(name) {
-		return fmt.Errorf("scaffold type name %q must be lowercase without surrounding whitespace", name)
-	}
-	if info.GoType == "" || info.GORMType == "" || info.SQLType == "" {
-		return fmt.Errorf("scaffold type %q requires Go, GORM, and SQL representations", name)
-	}
-	if err := typeRegistry.RegisterIfAbsent(name, info); err != nil {
-		return fmt.Errorf("register scaffold type %q: %w", name, err)
-	}
-	return nil
-}
-
-// ResolveType returns the complete representation of a registered field type.
-// Unknown names fail closed rather than silently generating string columns.
+// ResolveType returns the complete representation of a canonical field type.
+// The vocabulary is intentionally closed: adding a type requires updating its
+// Go, GORM, SQL, import, query-operator, and E2E representations together.
 func ResolveType(name string) (TypeInfo, error) {
-	v, ok := typeRegistry.Get(name)
-	if !ok {
-		return TypeInfo{}, fmt.Errorf("unknown scaffold field type %q; registered types: %s", name, strings.Join(registry.SortedKeys(typeRegistry, func(a, b string) bool { return a < b }), ", "))
-	}
-	return v, nil
-}
-
-func init() {
-	// Seed default types. Modules can override or add new types via RegisterType.
-	stringType := TypeInfo{GoType: "string", GORMType: "varchar(255)", SQLType: "VARCHAR(255)"}
-	intType := TypeInfo{GoType: "int64", GORMType: "bigint", SQLType: "BIGINT", IsNumeric: true}
-	boolType := TypeInfo{GoType: "bool", GORMType: "boolean", SQLType: "BOOLEAN DEFAULT false"}
-	datetimeType := TypeInfo{GoType: "time.Time", GORMType: "timestamptz", SQLType: "TIMESTAMPTZ", IsNumeric: true}
-	uuidType := TypeInfo{GoType: "uuid.UUID", GORMType: "uuid", SQLType: "UUID"}
-	textType := TypeInfo{GoType: "string", GORMType: "text", SQLType: "TEXT"}
-	decimalType := TypeInfo{GoType: "float64", GORMType: "decimal(10,2)", SQLType: "DECIMAL(19,4)", IsNumeric: true}
-	jsonType := TypeInfo{GoType: "json.RawMessage", GORMType: "jsonb", SQLType: "JSONB DEFAULT '{}'::jsonb"}
-
-	for name, info := range map[string]TypeInfo{
-		"string":   stringType,
-		"integer":  intType,
-		"decimal":  decimalType,
-		"boolean":  boolType,
-		"datetime": datetimeType,
-		"uuid":     uuidType,
-		"text":     textType,
-		"jsonb":    jsonType,
-	} {
-		if err := RegisterType(name, info); err != nil {
-			panic(err)
-		}
+	switch name {
+	case "string":
+		return TypeInfo{GoType: "string", GORMType: "varchar(255)", SQLType: "VARCHAR(255)", E2EValue: "Test Value"}, nil
+	case "integer":
+		return TypeInfo{GoType: "int64", GORMType: "bigint", SQLType: "BIGINT", E2EValue: "42", IsNumeric: true}, nil
+	case "decimal":
+		return TypeInfo{GoType: "float64", GORMType: "decimal(10,2)", SQLType: "DECIMAL(19,4)", E2EValue: "99.99", IsNumeric: true}, nil
+	case "boolean":
+		return TypeInfo{GoType: "bool", GORMType: "boolean", SQLType: "BOOLEAN DEFAULT false", E2EValue: "true"}, nil
+	case "datetime":
+		return TypeInfo{GoType: "time.Time", GORMType: "timestamptz", SQLType: "TIMESTAMPTZ", E2EValue: "2026-01-15T10:00:00Z", IsNumeric: true}, nil
+	case "uuid":
+		return TypeInfo{GoType: "uuid.UUID", GORMType: "uuid", SQLType: "UUID", E2EValue: "00000000-0000-0000-0000-000000000001"}, nil
+	case "text":
+		return TypeInfo{GoType: "string", GORMType: "text", SQLType: "TEXT", E2EValue: "Test description text"}, nil
+	case "jsonb":
+		return TypeInfo{GoType: "json.RawMessage", GORMType: "jsonb", SQLType: "JSONB DEFAULT '{}'::jsonb", E2EValue: `{"test":true}`}, nil
+	default:
+		return TypeInfo{}, fmt.Errorf("unknown scaffold field type %q; canonical types: %s", name, canonicalTypeNames)
 	}
 }
 
@@ -165,8 +133,8 @@ func ParseFieldSpec(spec string) (Field, error) {
 		Name: name,
 		Type: strings.TrimSpace(parts[1]),
 	}
-	if _, err := ResolveType(f.Type); err != nil {
-		return Field{}, fmt.Errorf("field %q: %w", f.Name, err)
+	if err := validateField(f); err != nil {
+		return Field{}, err
 	}
 	return f, nil
 }
@@ -188,6 +156,9 @@ func ParseFieldSpecs(specs string) ([]Field, error) {
 			return nil, err
 		}
 		fields = append(fields, f)
+	}
+	if err := validateFields(fields); err != nil {
+		return nil, err
 	}
 	return fields, nil
 }
