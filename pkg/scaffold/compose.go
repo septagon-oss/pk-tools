@@ -201,7 +201,7 @@ func validateProjectDependencies(deps ProjectDependencies, profile ImportProfile
 			return fmt.Errorf("additional replacement module path: %w", err)
 		}
 		if _, duplicate := seen[replacement.ModulePath]; duplicate {
-			return fmt.Errorf("Go module replacement %q is duplicated", replacement.ModulePath)
+			return fmt.Errorf("go module replacement %q is duplicated", replacement.ModulePath)
 		}
 		if err := validateLocalReplacementPath(replacement.LocalPath); err != nil {
 			return fmt.Errorf("replacement for %s: %w", replacement.ModulePath, err)

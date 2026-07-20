@@ -7,3 +7,7 @@
 // ADR: ADR-0029 (file purpose declaration).
 // Convention: C-14 (every Go file declares its purpose).
 package main
+
+// Implements: REQ-015.
+// Per: ADR-0021.
+// Discipline: C-14.

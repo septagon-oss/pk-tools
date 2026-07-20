@@ -1,5 +1,8 @@
 package cliapp
 
+// Implements: REQ-015.
+// Per: ADR-0021.
+// Discipline: C-14.
 // output.go owns renderer-neutral command output helpers for machine-readable
 // CLI responses.
 //

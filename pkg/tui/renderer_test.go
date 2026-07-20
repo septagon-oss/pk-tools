@@ -1,5 +1,8 @@
 package tui
 
+// Validates: REQ-015.
+// Per: ADR-0021.
+// Discipline: C-14.
 // renderer_test.go validates deterministic terminal rendering behavior with
 // and without ANSI color.
 //

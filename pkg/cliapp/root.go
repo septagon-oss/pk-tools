@@ -1,6 +1,9 @@
 // Package cliapp provides composable Cobra application primitives.
 package cliapp
 
+// Implements: REQ-015.
+// Per: ADR-0021.
+// Discipline: C-14.
 // root.go owns root-command assembly and shared argument helpers for OSS
 // PlatformKit CLIs.
 //

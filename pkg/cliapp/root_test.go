@@ -1,5 +1,8 @@
 package cliapp
 
+// Validates: REQ-015.
+// Per: ADR-0021.
+// Discipline: C-14.
 // root_test.go validates command assembly, output routing, and argument
 // detection behavior used by OSS PlatformKit CLIs.
 //

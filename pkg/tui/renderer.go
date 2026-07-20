@@ -1,6 +1,9 @@
 // Package tui contains terminal-aware rendering primitives for PlatformKit CLIs.
 package tui
 
+// Implements: REQ-015.
+// Per: ADR-0021.
+// Discipline: C-14.
 // renderer.go owns low-level terminal rendering primitives without binding the
 // CLI layer to a specific command framework.
 //

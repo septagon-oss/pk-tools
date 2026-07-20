@@ -1,5 +1,8 @@
 package main
 
+// Implements: REQ-015.
+// Per: ADR-0021.
+// Discipline: C-14.
 // explain.go owns the `pk explain modules` subcommand, which prints the
 // 9-module OSS essentials pack with the metadata each module declares as
 // public constants. Detailed port wiring lives in each module's docs and in

@@ -1,5 +1,8 @@
 package main
 
+// Implements: REQ-015.
+// Per: ADR-0021.
+// Discipline: C-14.
 // verify.go owns the `pk verify` subcommand, which runs `go vet ./...` and
 // `go test ./...` in the current working directory and surfaces both steps
 // with consistent prefixes so users can scan the output.
