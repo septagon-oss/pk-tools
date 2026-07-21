@@ -1,5 +1,9 @@
 # pk-tools
 
+> Part of [PlatformKit](https://github.com/septagon-oss/platformkit) — the open-source Go backend for multi-tenant SaaS.
+
+**Depends on.** `pk-modules` directly (which brings in `pk-core` transitively), plus `cobra` and `golang.org/x/mod`. `explain` imports each module package directly so the catalog it prints is sourced from the modules' own constants.
+
 [![Go Reference](https://pkg.go.dev/badge/github.com/septagon-oss/pk-tools.svg)](https://pkg.go.dev/github.com/septagon-oss/pk-tools)
 [![CI](https://github.com/septagon-oss/pk-tools/actions/workflows/go.yml/badge.svg)](https://github.com/septagon-oss/pk-tools/actions/workflows/go.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
@@ -47,6 +51,14 @@ func main() {
 - `pkg/tui` — terminal-aware `Renderer` with `Info`/`Success`/`Warn`/`Error` status lines, `Table` rendering, `CommandStart` banners, and a configurable `Palette` with `NO_COLOR`-aware color detection.
 - `pkg/scaffold` — governed code generators for modules, entities, features, and projects. Callers provide an explicit import profile and dependency graph; the generator does not emit placeholder capabilities or infer event payload schemas.
 - `cmd/pk` — the `pk` developer CLI (`doctor`, `verify`, `explain modules`) built on these primitives.
+
+## Try the `pk` CLI
+
+```bash
+go run ./cmd/pk doctor           # check that the PlatformKit OSS dev environment is healthy
+go run ./cmd/pk verify           # run go vet and go test in the current Go module
+go run ./cmd/pk explain modules  # print the 9-module OSS essentials pack
+```
 
 ## Verify
 
