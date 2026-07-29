@@ -5,6 +5,8 @@
 package scaffold
 
 import (
+	"go/parser"
+	"go/token"
 	"strings"
 	"testing"
 )
@@ -114,7 +116,7 @@ func TestScaffoldedModuleUsesDescriptorComposition(t *testing.T) {
 		Description: "Scaffold drift probe.",
 		Category:    "workspace",
 		Archetype:   "service",
-		Features:    []string{"widgets"},
+		Features:    []string{"catalog_sync"},
 	})
 
 	files := map[string]string{}
@@ -151,23 +153,71 @@ func TestScaffoldedModuleUsesDescriptorComposition(t *testing.T) {
 		}
 	}
 
-	// Registry archetype: no migrations embed, still descriptor-composed.
+	// One scaffold run must author ONE consistent feature record: the
+	// Descriptor literal in module.go and the manifest features block agree
+	// on name, description, version, and category (developer_portal is the
+	// exemplar: display-style Name, Category = module category).
+	for _, needle := range []string{
+		`Name:        "Catalog Sync",`,
+		`Description: "Catalog Sync feature for drift_probe_management.",`,
+		"Version:     ModuleVersion,",
+		"Category:    ModuleCategory,",
+	} {
+		if !strings.Contains(moduleGo, needle) {
+			t.Errorf("module.go feature descriptor must contain %q — must match the manifest features block", needle)
+		}
+	}
+	if strings.Contains(moduleGo, "Category:    ModuleName,") {
+		t.Error("module.go feature descriptor must use Category: ModuleCategory (developer_portal exemplar), not ModuleName")
+	}
+	manifest, ok := files["module.manifest.yaml"]
+	if !ok {
+		t.Fatal("scaffold did not produce module.manifest.yaml")
+	}
+	for _, needle := range []string{
+		"      name: Catalog Sync\n",
+		"      description: Catalog Sync feature for drift_probe_management.\n",
+		"      version: 1.0.0\n",
+		"      category: workspace\n",
+	} {
+		if !strings.Contains(manifest, needle) {
+			t.Errorf("module.manifest.yaml features block must contain %q — must match the module.go descriptor literal", needle)
+		}
+	}
+	if strings.Contains(manifest, "0.1.0") {
+		t.Error("module.manifest.yaml must not version features 0.1.0 while module.go authors ModuleVersion")
+	}
+
+	// Registry archetype WITH features: no migrations embed, still
+	// descriptor-composed, reconciled feature naming, and the
+	// no-migrations+features rendering must parse.
 	registry := mustGenerateModule(t, ModuleOptions{
 		Name:        "probe_registry",
 		Description: "Registry probe.",
 		Category:    "workspace",
 		Archetype:   "registry",
+		Features:    []string{"catalog_sync"},
 	})
+	registryModuleGo := ""
 	for _, f := range registry.Files {
-		if f.Path != "module.go" {
-			continue
+		if f.Path == "module.go" {
+			registryModuleGo = f.Content
 		}
-		if !strings.Contains(f.Content, "pkdef.Define(") {
-			t.Error("registry module.go must be descriptor-composed")
-		}
-		if strings.Contains(f.Content, "embed.FS") || strings.Contains(f.Content, "platform.SQLAssets") {
-			t.Error("registry module.go must not embed migrations")
-		}
+	}
+	if registryModuleGo == "" {
+		t.Fatal("registry scaffold did not produce module.go")
+	}
+	if !strings.Contains(registryModuleGo, "pkdef.Define(") {
+		t.Error("registry module.go must be descriptor-composed")
+	}
+	if strings.Contains(registryModuleGo, "embed.FS") || strings.Contains(registryModuleGo, "platform.SQLAssets") {
+		t.Error("registry module.go must not embed migrations")
+	}
+	if !strings.Contains(registryModuleGo, `Name:        "Catalog Sync",`) {
+		t.Error("registry module.go feature descriptor must carry the reconciled display Name")
+	}
+	if _, err := parser.ParseFile(token.NewFileSet(), "module.go", registryModuleGo, parser.AllErrors); err != nil {
+		t.Errorf("registry module.go (features without migrations) does not parse: %v", err)
 	}
 }
 

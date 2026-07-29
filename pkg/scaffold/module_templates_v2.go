@@ -325,7 +325,7 @@ func renderModuleGo(name, description, category, pascalName string, tags []strin
 
 	featuresField := renderModuleFeatureDescriptors(name, features)
 
-	header := filePurposeHeader("module.go", "module identity, descriptor composition source, and migration embed", "ADR-0017", "ADR-0047")
+	header := filePurposeHeader("module.go", "module identity, descriptor composition source, and migration embed", "ADR-0017", "ADR-0061")
 
 	return fmt.Sprintf(`package %s
 
@@ -354,7 +354,7 @@ type %sModule = platformfx.DescriptorModule
 // cross-module dependencies, features, and migrations. The standard shell
 // conventions — translation registration, grouped health, and the admin
 // surface providers — are contributed by pkdef.StandardRuntime and are
-// never wired by hand (ADR-0047).
+// never wired by hand (ADR-0061).
 var Descriptor = pkdef.Define(pkdef.StandardRuntime(platform.ModuleDescriptor{
 	ID:          ModuleName,
 	Description: ModuleDescription,
@@ -398,9 +398,12 @@ var (
 }
 
 // renderModuleFeatureDescriptors emits the Descriptor's Features field: one
-// inline platform.FeatureDescriptor literal per scaffolded feature, matching
-// the converged internal convention (feature Category is the module name and
-// permissions come from the contracts package).
+// inline platform.FeatureDescriptor literal per scaffolded feature, following
+// the developer_portal exemplar (display-style Name, Category = module
+// category, permissions from the contracts package). Name, description,
+// version, and category MUST stay in lockstep with the features block that
+// renderModuleManifestYAML emits — one scaffold run authors ONE consistent
+// feature record.
 func renderModuleFeatureDescriptors(name string, features []string) string {
 	if len(features) == 0 {
 		return ""
@@ -408,19 +411,24 @@ func renderModuleFeatureDescriptors(name string, features []string) string {
 	var b strings.Builder
 	b.WriteString("\tFeatures: []platform.FeatureDescriptor{\n")
 	for _, feature := range features {
-		pascalFeature := ToPascalCase(feature)
 		b.WriteString("\t\t{\n")
 		fmt.Fprintf(&b, "\t\t\tID:          %q,\n", feature)
-		fmt.Fprintf(&b, "\t\t\tName:        %q,\n", pascalFeature)
-		fmt.Fprintf(&b, "\t\t\tDescription: %q,\n", pascalFeature+" feature for "+ToPascalCase(name))
+		fmt.Fprintf(&b, "\t\t\tName:        %q,\n", moduleDisplayName(feature))
+		fmt.Fprintf(&b, "\t\t\tDescription: %q,\n", featureDescription(name, feature))
 		b.WriteString("\t\t\tVersion:     ModuleVersion,\n")
-		b.WriteString("\t\t\tCategory:    ModuleName,\n")
+		b.WriteString("\t\t\tCategory:    ModuleCategory,\n")
 		fmt.Fprintf(&b, "\t\t\tTags:        []string{ModuleName, %q},\n", feature)
 		b.WriteString("\t\t\tPermissions: contracts.ModulePermissions(),\n")
 		b.WriteString("\t\t},\n")
 	}
 	b.WriteString("\t},\n")
 	return b.String()
+}
+
+// featureDescription is the single authored description for a scaffolded
+// feature, shared by the module.go descriptor literal and the manifest.
+func featureDescription(name, feature string) string {
+	return moduleDisplayName(feature) + " feature for " + name + "."
 }
 
 func renderModuleDependenciesGo(name string, extraPorts []string) string {
@@ -757,8 +765,10 @@ func renderModuleManifestYAML(name, description, category, resourceName string, 
 		for _, f := range features {
 			b.WriteString("    - id: " + f + "\n")
 			b.WriteString("      name: " + moduleDisplayName(f) + "\n")
-			b.WriteString("      description: " + yamlString(moduleDisplayName(f)+" feature for "+name+".") + "\n")
-			b.WriteString("      version: 0.1.0\n")
+			b.WriteString("      description: " + yamlString(featureDescription(name, f)) + "\n")
+			// Must equal the feature's Version in module.go's Descriptor
+			// (ModuleVersion) — one scaffold run authors one record.
+			b.WriteString("      version: 1.0.0\n")
 			b.WriteString("      category: " + category + "\n")
 			b.WriteString("      enabled: true\n")
 		}
