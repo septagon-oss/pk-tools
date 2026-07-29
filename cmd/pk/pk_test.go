@@ -149,7 +149,7 @@ func TestAdd(t *testing.T) {
 	}
 }
 
-func TestExplainModulesPrintsAllNine(t *testing.T) {
+func TestExplainModulesPrintsAllTen(t *testing.T) {
 	var out bytes.Buffer
 	if err := runExplainModules(&out, false); err != nil {
 		t.Fatalf("runExplainModules error: %v", err)
@@ -164,6 +164,7 @@ func TestExplainModulesPrintsAllNine(t *testing.T) {
 		"notification_management",
 		"content_management",
 		"admin_management",
+		"branding_management",
 	}
 	got := out.String()
 	for _, id := range expected {
@@ -182,13 +183,20 @@ func TestExplainModulesJSONShape(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
 		t.Fatalf("invalid JSON: %v\npayload: %s", err, out.String())
 	}
-	if len(decoded) != 9 {
-		t.Fatalf("expected 9 modules, got %d", len(decoded))
+	if len(decoded) != 10 {
+		t.Fatalf("expected 10 modules, got %d", len(decoded))
 	}
+	foundBranding := false
 	for _, m := range decoded {
 		if m.ID == "" || m.Name == "" || m.Description == "" {
 			t.Fatalf("entry missing required field: %+v", m)
 		}
+		if m.ID == "branding_management" {
+			foundBranding = true
+		}
+	}
+	if !foundBranding {
+		t.Fatalf("expected an entry with id %q, got %+v", "branding_management", decoded)
 	}
 }
 

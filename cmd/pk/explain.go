@@ -4,7 +4,7 @@ package main
 // Per: ADR-0021.
 // Discipline: C-14.
 // explain.go owns the `pk explain modules` subcommand, which prints the
-// 9-module OSS essentials pack with the metadata each module declares as
+// 10-module OSS essentials pack with the metadata each module declares as
 // public constants. Detailed port wiring lives in each module's docs and in
 // the catalog's Compose() output; for v0.1.0 we surface the catalog overview
 // only.
@@ -21,6 +21,7 @@ import (
 	"github.com/septagon-oss/pk-modules/pkg/apikey"
 	"github.com/septagon-oss/pk-modules/pkg/audit"
 	"github.com/septagon-oss/pk-modules/pkg/auth"
+	"github.com/septagon-oss/pk-modules/pkg/branding"
 	"github.com/septagon-oss/pk-modules/pkg/content"
 	"github.com/septagon-oss/pk-modules/pkg/health"
 	"github.com/septagon-oss/pk-modules/pkg/notification"
@@ -53,12 +54,12 @@ func newExplainModulesCmd() *cobra.Command {
 	var asJSON bool
 	c := &cobra.Command{
 		Use:   "modules",
-		Short: "Print the 9-module OSS essentials pack",
+		Short: "Print the 10-module OSS essentials pack",
 		Long: "modules prints the OSS essentials pack (tenant, user, auth, " +
-			"api-key, audit, health, notification, content, admin) with each " +
-			"module's id, name, description, and version. The metadata is " +
-			"sourced from each module's public constants, so it stays in sync " +
-			"with the catalog automatically.",
+			"api-key, audit, health, notification, content, admin, branding) " +
+			"with each module's id, name, description, and version. The " +
+			"metadata is sourced from each module's public constants, so it " +
+			"stays in sync with the catalog automatically.",
 		RunE: func(c *cobra.Command, args []string) error {
 			return runExplainModules(c.OutOrStdout(), asJSON)
 		},
@@ -67,7 +68,7 @@ func newExplainModulesCmd() *cobra.Command {
 	return c
 }
 
-// catalogModules returns the static 9-module essentials pack. We import each
+// catalogModules returns the static 10-module essentials pack. We import each
 // module package directly so the constants are the canonical source of truth.
 // Note that we do not call NewModule() for each — most modules require a
 // sqlite DSN to construct fully, and explain is meant to be cheap.
@@ -82,6 +83,7 @@ func catalogModules() []moduleInfo {
 		{ID: notification.ModuleID, Name: notification.ModuleName, Description: notification.ModuleDescription, Version: notification.ModuleVersion},
 		{ID: content.ModuleID, Name: content.ModuleName, Description: content.ModuleDescription, Version: content.ModuleVersion},
 		{ID: admin.ModuleID, Name: admin.ModuleName, Description: admin.ModuleDescription, Version: admin.ModuleVersion},
+		{ID: branding.ModuleID, Name: branding.ModuleName, Description: branding.ModuleDescription, Version: branding.ModuleVersion},
 	}
 }
 
