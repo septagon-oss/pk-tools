@@ -304,7 +304,7 @@ func renderModuleGo(name, description, category, pascalName string, tags []strin
 	imports = append(imports, `"example.com/platformkit/backend-kit/app/module"`)
 	imports = append(imports, `"example.com/platformkit/backend-kit/app/module/providers/standard"`)
 	imports = append(imports, `"example.com/platformkit/business-modules/ports"`)
-	imports = append(imports, `portsurface "example.com/platformkit/ports/surface"`)
+		imports = append(imports, `portsurface "github.com/septagon-oss/pk-ui/surface"`)
 	imports = append(imports, `"go.uber.org/fx"`)
 	if needsModuleMigrations(archetype) {
 		imports = append([]string{`"embed"`}, imports...)
@@ -558,7 +558,7 @@ func renderModuleSurfacesGo(name, displayName, pascalName, resourceKebab string)
 import (
 	contracts "example.com/platformkit/business-modules/%s/contracts"
 	"example.com/platformkit/business-modules/ports"
-	portsurface "example.com/platformkit/ports/surface"
+	portsurface "github.com/septagon-oss/pk-ui/surface"
 )
 
 // moduleSurfaceContribution registers this module's admin page. The route ID

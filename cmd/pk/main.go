@@ -43,6 +43,6 @@ func newRootCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-	root.AddCommand(newDoctorCmd(), newVerifyCmd(), newExplainCmd())
+	root.AddCommand(newDoctorCmd(), newVerifyCmd(), newExplainCmd(), newDesignCmd())
 	return root
 }

@@ -1,0 +1,750 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PlatformKit Design Delivery</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #0d1424;
+        --panel: rgba(17, 24, 39, 0.92);
+        --panel-soft: rgba(23, 33, 56, 0.78);
+        --border: rgba(148, 163, 184, 0.22);
+        --text: #e7ecf5;
+        --text-soft: #aeb8cc;
+        --accent: #7dd3fc;
+        --accent-strong: #38bdf8;
+        --danger: #fca5a5;
+        --success: #86efac;
+        --radius: 18px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: Inter, system-ui, sans-serif;
+        background:
+          radial-gradient(circle at top right, rgba(56, 189, 248, 0.22), transparent 34%),
+          radial-gradient(circle at bottom left, rgba(14, 165, 233, 0.18), transparent 28%),
+          var(--bg);
+        color: var(--text);
+      }
+
+      .shell {
+        display: grid;
+        gap: 16px;
+        padding: 18px;
+      }
+
+      .hero,
+      .panel {
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--panel);
+        backdrop-filter: blur(18px);
+      }
+
+      .hero {
+        padding: 18px;
+      }
+
+      .eyebrow {
+        margin: 0 0 8px;
+        font-size: 11px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--accent);
+      }
+
+      h1 {
+        margin: 0 0 10px;
+        font-size: 24px;
+        line-height: 1.05;
+      }
+
+      .hero p {
+        margin: 0;
+        color: var(--text-soft);
+        line-height: 1.5;
+        font-size: 13px;
+      }
+
+      .panel {
+        padding: 16px;
+      }
+
+      .panel h2 {
+        margin: 0 0 8px;
+        font-size: 14px;
+      }
+
+      .panel p,
+      .panel li,
+      .status {
+        font-size: 12px;
+        line-height: 1.5;
+        color: var(--text-soft);
+      }
+
+      ol {
+        margin: 10px 0 0;
+        padding-left: 18px;
+      }
+
+      .controls {
+        display: grid;
+        gap: 12px;
+      }
+
+      input[type="file"] {
+        width: 100%;
+        color: var(--text-soft);
+      }
+
+      input[type="text"] {
+        width: 100%;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: var(--panel-soft);
+        color: var(--text);
+        padding: 11px 12px;
+        font: 12px/1.4 Inter, system-ui, sans-serif;
+      }
+
+      label {
+        display: grid;
+        gap: 6px;
+        color: var(--text-soft);
+        font-size: 11px;
+      }
+
+      textarea {
+        width: 100%;
+        min-height: 280px;
+        resize: vertical;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        background: var(--panel-soft);
+        color: var(--text);
+        padding: 14px;
+        font: 12px/1.55 "SFMono-Regular", "JetBrains Mono", ui-monospace, monospace;
+      }
+
+      .actions {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+
+      button {
+        appearance: none;
+        border: 0;
+        border-radius: 999px;
+        padding: 10px 16px;
+        font: inherit;
+        font-size: 12px;
+        cursor: pointer;
+        transition: transform 120ms ease, opacity 120ms ease, background 120ms ease;
+      }
+
+      button:hover {
+        transform: translateY(-1px);
+      }
+
+      button:disabled {
+        opacity: 0.6;
+        cursor: wait;
+        transform: none;
+      }
+
+      .primary {
+        background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+        color: #032133;
+        font-weight: 700;
+      }
+
+      .secondary {
+        background: rgba(148, 163, 184, 0.12);
+        color: var(--text);
+      }
+
+      .status {
+        min-height: 20px;
+      }
+
+      .status.error {
+        color: var(--danger);
+      }
+
+      .status.success {
+        color: var(--success);
+      }
+
+      .tabs {
+        display: flex;
+        gap: 0;
+        border-bottom: 1px solid var(--border);
+        margin-bottom: 12px;
+      }
+
+      .tab {
+        flex: 1;
+        background: none;
+        border: none;
+        border-bottom: 2px solid transparent;
+        border-radius: 0;
+        padding: 10px 12px;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text-soft);
+        cursor: pointer;
+        transition: color 120ms ease, border-color 120ms ease;
+      }
+
+      .tab:hover {
+        transform: none;
+        color: var(--text);
+      }
+
+      .tab.active {
+        color: var(--accent);
+        border-bottom-color: var(--accent);
+      }
+
+      .tab-content {
+        display: none;
+      }
+
+      .tab-content.active {
+        display: grid;
+        gap: 12px;
+      }
+
+      .token-stats {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+
+      .stat-card {
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: var(--panel-soft);
+        padding: 12px;
+      }
+
+      .stat-card .label {
+        font-size: 10px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--text-soft);
+        margin: 0 0 4px;
+      }
+
+      .stat-card .value {
+        font-size: 20px;
+        font-weight: 700;
+        color: var(--accent);
+        margin: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <section class="hero">
+        <p class="eyebrow">PlatformKit Design Delivery</p>
+        <h1>One governed design graph, from code to Figma and back.</h1>
+        <p>
+          Import OSS, Pro, or client deliveries as native Variables and
+          reusable components. Export only validated source-token changes.
+        </p>
+      </section>
+
+      <section class="panel">
+        <div class="tabs">
+          <button class="tab active" data-tab="artifacts">Compiled Delivery</button>
+          <button class="tab" data-tab="tokens">Tokens</button>
+          <button class="tab" data-tab="changes">Export</button>
+          <button class="tab" data-tab="visual">Conformance</button>
+        </div>
+
+        <div id="tab-artifacts" class="tab-content active">
+          <p style="margin:0">
+            Import the portable bundle emitted by
+            <code>platformkit design compile --target figma</code>. This applies variables,
+            component masters, and curated pages in compiler order.
+          </p>
+          <input id="artifactFileInput" type="file" accept=".json,application/json" />
+          <textarea
+            id="artifactInput"
+            spellcheck="false"
+            placeholder='Paste the JSON from figma-plugin-bundle.json here...'
+          ></textarea>
+          <div id="artifactPreview" class="token-stats" style="display:none"></div>
+          <div class="actions">
+            <button id="importArtifactsButton" class="primary">Import compiled bundle</button>
+            <button id="clearArtifactsButton" class="secondary">Clear</button>
+          </div>
+        </div>
+
+        <div id="tab-tokens" class="tab-content">
+          <p style="margin:0">
+            Import a <code>pk.design.figma-variables.v2</code> delivery. Source
+            Variables are editable; semantic Variables remain native aliases so
+            every dependent component updates immediately.
+          </p>
+          <input id="tokenFileInput" type="file" accept=".json,application/json" />
+          <textarea
+            id="tokenInput"
+            spellcheck="false"
+            placeholder='Paste the Figma Variables JSON bundle here...'
+          ></textarea>
+          <div id="tokenPreview" class="token-stats" style="display:none"></div>
+          <div class="actions">
+            <button id="importTokensButton" class="primary">Import tokens</button>
+            <button id="clearTokensButton" class="secondary">Clear</button>
+          </div>
+        </div>
+
+        <div id="tab-changes" class="tab-content">
+          <p style="margin:0">
+            Export the minimal governed change set. Read-only aliases, stale
+            snapshots, detached bindings, and unsupported codecs fail closed.
+          </p>
+          <label>
+            Author
+            <input id="changeAuthor" type="text" autocomplete="name" placeholder="designer@example.com" />
+          </label>
+          <label>
+            Reason
+            <input id="changeReason" type="text" placeholder="Why these token changes are needed" />
+          </label>
+          <div class="actions">
+            <button id="exportChangesButton" class="primary">Export token changes</button>
+          </div>
+          <p style="margin:0">
+            Apply the downloaded JSON with the profile’s source receiver. Pro
+            deliveries use <code>pkds handoff receive-tokens</code>; client
+            deliveries use the client overlay receiver.
+          </p>
+        </div>
+
+        <div id="tab-visual" class="tab-content">
+          <p style="margin:0">
+            Validate that every Storybook delivery fixture resolves to exactly
+            one native, editable Figma Page instance with the same authored
+            identity and viewport. The attached native contract also verifies
+            every variant, editable property, slot, and nested instance edge.
+            No screenshot is created or imported.
+          </p>
+          <input id="visualManifestFileInput" type="file" accept=".json,application/json" />
+          <textarea
+            id="visualManifestInput"
+            spellcheck="false"
+            placeholder='Paste platformkit.storybook.visual-delivery.json here...'
+          ></textarea>
+          <div id="visualPreview" class="token-stats" style="display:none"></div>
+          <div class="actions">
+            <button id="exportVisualButton" class="primary">Validate native delivery</button>
+            <button id="clearVisualButton" class="secondary">Clear</button>
+          </div>
+          <p style="margin:0">
+            The downloaded JSON is structural conformance evidence. Storybook
+            runs its separate browser-to-reviewed-browser pixel regression;
+            Figma and browsers are never treated as the same raster engine.
+          </p>
+        </div>
+
+        <div id="status" class="status"></div>
+        <div class="actions" style="margin-top:4px">
+          <button id="closeButton" class="secondary">Close plugin</button>
+        </div>
+      </section>
+    </div>
+
+    <script>
+      // Elements — compiled artifact tab
+      const artifactFileInput = document.getElementById("artifactFileInput");
+      const artifactInput = document.getElementById("artifactInput");
+      const importArtifactsButton = document.getElementById("importArtifactsButton");
+      const clearArtifactsButton = document.getElementById("clearArtifactsButton");
+      const artifactPreview = document.getElementById("artifactPreview");
+
+      // Elements — token tab
+      const tokenFileInput = document.getElementById("tokenFileInput");
+      const tokenInput = document.getElementById("tokenInput");
+      const importTokensButton = document.getElementById("importTokensButton");
+      const clearTokensButton = document.getElementById("clearTokensButton");
+      const tokenPreview = document.getElementById("tokenPreview");
+
+      // Elements — governed change export
+      const changeAuthor = document.getElementById("changeAuthor");
+      const changeReason = document.getElementById("changeReason");
+      const exportChangesButton = document.getElementById("exportChangesButton");
+
+      // Elements — native structural conformance
+      const visualManifestFileInput = document.getElementById("visualManifestFileInput");
+      const visualManifestInput = document.getElementById("visualManifestInput");
+      const visualPreview = document.getElementById("visualPreview");
+      const exportVisualButton = document.getElementById("exportVisualButton");
+      const clearVisualButton = document.getElementById("clearVisualButton");
+
+      // Shared
+      const closeButton = document.getElementById("closeButton");
+      const status = document.getElementById("status");
+
+      // ---- Tab switching ----
+      document.querySelectorAll(".tab").forEach((tab) => {
+        tab.addEventListener("click", () => {
+          document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
+          document.querySelectorAll(".tab-content").forEach((c) => c.classList.remove("active"));
+          tab.classList.add("active");
+          document.getElementById("tab-" + tab.dataset.tab).classList.add("active");
+          setStatus("");
+        });
+      });
+
+      // ---- Helpers ----
+      function setStatus(message, kind) {
+        status.textContent = message || "";
+        status.className = "status" + (kind ? " " + kind : "");
+      }
+
+      function postPlugin(msg) {
+        parent.postMessage({ pluginMessage: msg }, "*");
+      }
+
+      // ---- Compiled artifact import ----
+      function previewArtifacts(text) {
+        try {
+          const bundle = JSON.parse(text);
+          if (
+            bundle.kind !== "platformkit.figma.plugin-bundle" ||
+            bundle.schema !== "platformkit.figma.plugin-bundle.v5" ||
+            !bundle.tokenBundle ||
+            bundle.tokenBundle.schema !== "pk.design.figma-variables.v2" ||
+            !bundle.nativeDelivery ||
+            bundle.nativeDelivery.schema !== "platformkit.figma.native-delivery.v1" ||
+            !Array.isArray(bundle.artifacts)
+          ) {
+            artifactPreview.style.display = "none";
+            return;
+          }
+          const tokenBundle = bundle.tokenBundle;
+          const profile = bundle.profile || "unknown";
+          const parent = bundle.parentProfile
+            ? `${bundle.parentProfile} · ${String(bundle.parentManifestDigest || "").slice(0, 12)}`
+            : "root";
+          let variables = 0;
+          for (const collection of tokenBundle.collections || []) {
+            variables += Array.isArray(collection.variables) ? collection.variables.length : 0;
+          }
+          const counts = {};
+          for (const artifact of bundle.artifacts) {
+            const kind = artifact && artifact.kind ? artifact.kind : "unknown";
+            counts[kind] = (counts[kind] || 0) + 1;
+          }
+          let html =
+            `<div class="stat-card"><p class="label">Profile</p><p class="value" style="font-size:13px">${escapeHtml(profile)}</p></div>` +
+            `<div class="stat-card"><p class="label">Exact Parent</p><p class="value" style="font-size:13px">${escapeHtml(parent)}</p></div>` +
+            `<div class="stat-card"><p class="label">Native Variables</p><p class="value">${variables}</p></div>` +
+            `<div class="stat-card"><p class="label">Native Components</p><p class="value">${(bundle.nativeDelivery.components || []).length}</p></div>` +
+            `<div class="stat-card"><p class="label">Solution Fixtures</p><p class="value">${(bundle.nativeDelivery.solutions || []).length}</p></div>` +
+            `<div class="stat-card"><p class="label">Native Artifacts</p><p class="value">${bundle.artifacts.length}</p></div>`;
+          for (const kind of Object.keys(counts).sort()) {
+            html += `<div class="stat-card"><p class="label">${escapeHtml(kind)}</p><p class="value">${counts[kind]}</p></div>`;
+          }
+          artifactPreview.innerHTML = html;
+          artifactPreview.style.display = "grid";
+        } catch (_) {
+          artifactPreview.style.display = "none";
+        }
+      }
+
+      artifactInput.addEventListener("input", () => previewArtifacts(artifactInput.value));
+
+      artifactFileInput.addEventListener("change", async (event) => {
+        const [file] = event.target.files || [];
+        if (!file) return;
+        try {
+          const text = await file.text();
+          artifactInput.value = text;
+          previewArtifacts(text);
+          setStatus(`Loaded ${file.name}`, "success");
+        } catch (error) {
+          setStatus(error instanceof Error ? error.message : String(error), "error");
+        }
+      });
+
+      importArtifactsButton.addEventListener("click", () => {
+        const payload = artifactInput.value.trim();
+        if (!payload) {
+          setStatus("Paste a compiled bundle or upload figma-plugin-bundle.json first.", "error");
+          return;
+        }
+        importArtifactsButton.disabled = true;
+        setStatus("Importing compiled Figma artifacts...");
+        postPlugin({ type: "import-artifacts", payload });
+      });
+
+      clearArtifactsButton.addEventListener("click", () => {
+        artifactInput.value = "";
+        artifactFileInput.value = "";
+        artifactPreview.style.display = "none";
+        setStatus("");
+      });
+
+      // ---- Token import ----
+      function previewTokens(text) {
+        try {
+          const bundle = JSON.parse(text);
+          if (bundle.kind !== "figma-variables" || !Array.isArray(bundle.collections)) {
+            tokenPreview.style.display = "none";
+            return;
+          }
+          let totalVars = 0;
+          let writableVars = 0;
+          let html = "";
+          for (const coll of bundle.collections) {
+            const count = Array.isArray(coll.variables) ? coll.variables.length : 0;
+            totalVars += count;
+            if (Array.isArray(coll.variables)) {
+              writableVars += coll.variables.filter(
+                variable => variable && variable.binding && variable.binding.writable === true
+              ).length;
+            }
+            html += `<div class="stat-card"><p class="label">${escapeHtml(coll.name)}</p><p class="value">${count}</p></div>`;
+          }
+          html = `<div class="stat-card"><p class="label">Total Variables</p><p class="value">${totalVars}</p></div>` + html;
+          if (bundle.schema === "pk.design.figma-variables.v2") {
+            const profile = bundle.snapshot && bundle.snapshot.profile
+              ? bundle.snapshot.profile.id
+              : "unknown";
+            html =
+              `<div class="stat-card"><p class="label">Profile</p><p class="value" style="font-size:13px">${escapeHtml(profile)}</p></div>` +
+              `<div class="stat-card"><p class="label">Writable Sources</p><p class="value">${writableVars}</p></div>` +
+              html;
+          }
+          tokenPreview.innerHTML = html;
+          tokenPreview.style.display = "grid";
+        } catch (_) {
+          tokenPreview.style.display = "none";
+        }
+      }
+
+      function escapeHtml(str) {
+        const div = document.createElement("div");
+        div.textContent = str;
+        return div.innerHTML;
+      }
+
+      tokenInput.addEventListener("input", () => previewTokens(tokenInput.value));
+
+      tokenFileInput.addEventListener("change", async (event) => {
+        const [file] = event.target.files || [];
+        if (!file) return;
+        try {
+          const text = await file.text();
+          tokenInput.value = text;
+          previewTokens(text);
+          setStatus(`Loaded ${file.name}`, "success");
+        } catch (error) {
+          setStatus(error instanceof Error ? error.message : String(error), "error");
+        }
+      });
+
+      importTokensButton.addEventListener("click", () => {
+        const payload = tokenInput.value.trim();
+        if (!payload) {
+          setStatus("Paste a token bundle or upload a JSON file first.", "error");
+          return;
+        }
+        importTokensButton.disabled = true;
+        setStatus("Importing tokens as Figma Variables...");
+        postPlugin({ type: "import-tokens", payload });
+      });
+
+      clearTokensButton.addEventListener("click", () => {
+        tokenInput.value = "";
+        tokenFileInput.value = "";
+        tokenPreview.style.display = "none";
+        setStatus("");
+      });
+
+      // ---- Governed change export ----
+      exportChangesButton.addEventListener("click", () => {
+        exportChangesButton.disabled = true;
+        setStatus("Validating managed Variables and building a minimal change set...");
+        postPlugin({
+          type: "export-token-changes",
+          author: changeAuthor.value.trim(),
+          reason: changeReason.value.trim()
+        });
+      });
+
+      // ---- Native structural conformance ----
+      function previewVisualDelivery(text) {
+        try {
+          const manifest = JSON.parse(text);
+          if (
+            manifest.schema !== "platformkit.storybook.visual-delivery.v2" ||
+            !Array.isArray(manifest.fixtures)
+          ) {
+            visualPreview.style.display = "none";
+            return;
+          }
+          const desktop = manifest.fixtures.filter(
+            fixture => fixture && fixture.viewport && fixture.viewport.token === "desktop"
+          ).length;
+          const mobile = manifest.fixtures.filter(
+            fixture => fixture && fixture.viewport && fixture.viewport.token === "mobile"
+          ).length;
+          visualPreview.innerHTML =
+            `<div class="stat-card"><p class="label">Native fixtures</p><p class="value">${manifest.fixtures.length}</p></div>` +
+            `<div class="stat-card"><p class="label">Desktop</p><p class="value">${desktop}</p></div>` +
+            `<div class="stat-card"><p class="label">Mobile</p><p class="value">${mobile}</p></div>`;
+          visualPreview.style.display = "grid";
+        } catch (_) {
+          visualPreview.style.display = "none";
+        }
+      }
+
+      visualManifestInput.addEventListener(
+        "input",
+        () => previewVisualDelivery(visualManifestInput.value)
+      );
+
+      visualManifestFileInput.addEventListener("change", async (event) => {
+        const [file] = event.target.files || [];
+        if (!file) return;
+        try {
+          const text = await file.text();
+          visualManifestInput.value = text;
+          previewVisualDelivery(text);
+          setStatus(`Loaded ${file.name}`, "success");
+        } catch (error) {
+          setStatus(error instanceof Error ? error.message : String(error), "error");
+        }
+      });
+
+      exportVisualButton.addEventListener("click", () => {
+        const payload = visualManifestInput.value.trim();
+        if (!payload) {
+          setStatus(
+            "Upload or paste platformkit.storybook.visual-delivery.json first.",
+            "error"
+          );
+          return;
+        }
+        exportVisualButton.disabled = true;
+        setStatus("Resolving native solution instances and validating authored identity...");
+        postPlugin({
+          type: "validate-native-delivery",
+          payload
+        });
+      });
+
+      clearVisualButton.addEventListener("click", () => {
+        visualManifestInput.value = "";
+        visualManifestFileInput.value = "";
+        visualPreview.style.display = "none";
+        setStatus("");
+      });
+
+      function downloadJSON(filename, payload) {
+        const blob = new Blob([payload], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = filename || "platformkit-token-changes.json";
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      }
+
+      // ---- Close ----
+      closeButton.addEventListener("click", () => postPlugin({ type: "close" }));
+
+      // ---- Messages from plugin ----
+      window.onmessage = (event) => {
+        const message = event.data && event.data.pluginMessage;
+        if (!message || typeof message.type !== "string") return;
+
+        if (message.type === "artifacts-progress") {
+          setStatus(
+            `Importing ${message.current || 0}/${message.total || 0}: ${message.artifact || "artifact"}...`
+          );
+        }
+
+        if (message.type === "artifacts-success") {
+          importArtifactsButton.disabled = false;
+          const r = message.result || {};
+          const tokenDelivery = r.tokenDelivery || {};
+          setStatus(
+            `Imported ${tokenDelivery.variables || 0} native variables and ${r.artifacts || 0} native artifacts for ${r.product || "the selected product"}.`,
+            "success"
+          );
+        }
+
+        if (message.type === "artifacts-error") {
+          importArtifactsButton.disabled = false;
+          setStatus(message.message || "Compiled bundle import failed.", "error");
+        }
+
+        if (message.type === "tokens-success") {
+          importTokensButton.disabled = false;
+          const r = message.result || {};
+          setStatus(
+            `Imported ${r.variables || 0} variables across ${r.collections || 0} collections` +
+              (r.governed ? ` for governed profile ${r.profile || "unknown"}.` : "."),
+            "success"
+          );
+        }
+
+        if (message.type === "tokens-error") {
+          importTokensButton.disabled = false;
+          setStatus(message.message || "Token import failed.", "error");
+        }
+
+        if (message.type === "changes-success") {
+          exportChangesButton.disabled = false;
+          const r = message.result || {};
+          downloadJSON(r.filename, r.payload || "");
+          setStatus(
+            `Exported ${r.changes || 0} source-token change${r.changes === 1 ? "" : "s"} for ${r.profile || "the active profile"}.`,
+            "success"
+          );
+        }
+
+        if (message.type === "changes-error") {
+          exportChangesButton.disabled = false;
+          setStatus(message.message || "Governed token export failed.", "error");
+        }
+
+        if (message.type === "native-conformance-success") {
+          exportVisualButton.disabled = false;
+          const r = message.result || {};
+          downloadJSON(
+            r.filename || "platformkit-figma-native-conformance.json",
+            r.payload || ""
+          );
+          setStatus(
+            `Validated ${r.fixtures || 0} native solution fixtures for ${r.profile || "the active profile"}.`,
+            "success"
+          );
+        }
+
+        if (message.type === "native-conformance-error") {
+          exportVisualButton.disabled = false;
+          setStatus(message.message || "Native delivery validation failed.", "error");
+        }
+      };
+    </script>
+  </body>
+</html>

@@ -1,0 +1,10 @@
+{
+  "name": "@septagon-oss/pk-design-figma-plugin",
+  "private": true,
+  "version": "0.1.0",
+  "description": "OSS Figma plugin for governed PlatformKit design delivery round trips",
+  "scripts": {
+    "check:plugin": "node --check code.js",
+    "test": "node --test code_test.mjs && node --check code.js"
+  }
+}
