@@ -60,6 +60,11 @@ func TestGenerateStarterModuleEmitsStarterShape(t *testing.T) {
 		"starterapp.WithModules",
 		`CREATE TABLE IF NOT EXISTS notes (`,
 		`/api/v1/notes"`,
+		"invalid JSON body",
+		"name is required",
+		"crypto/rand",
+		"func newID() (string, error)",
+		"internal error",
 	} {
 		if !strings.Contains(joined, symbol) {
 			t.Errorf("generated output missing %q", symbol)
@@ -68,8 +73,25 @@ func TestGenerateStarterModuleEmitsStarterShape(t *testing.T) {
 	if strings.Contains(joined, "notess") {
 		t.Error("generated output must not double-pluralize a name already ending in \"s\" (found \"notess\")")
 	}
+	if strings.Contains(joined, "UnixNano") {
+		t.Error("generated handler must not derive IDs from time.Now().UnixNano(); use store.newID() (crypto/rand)")
+	}
+	if strings.Contains(joined, "err.Error(), http.StatusInternalServerError") {
+		t.Error("generated handler's 500 response must not leak err.Error() to the client")
+	}
 	if res.RegistrationCode["snippet"] == "" {
 		t.Error("registration snippet is empty")
+	}
+}
+
+func TestGenerateStarterModuleDefaultsBlankDescription(t *testing.T) {
+	res, err := GenerateStarterModule(StarterModuleOptions{Name: "notes"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := allContent(res)
+	if !strings.Contains(joined, defaultStarterModuleDescription) {
+		t.Errorf("blank description: expected default %q to appear in generated output", defaultStarterModuleDescription)
 	}
 }
 
@@ -123,6 +145,27 @@ func TestGenerateStarterModuleGoFilesParse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertGoFilesParse(t, res)
+}
+
+// TestGenerateStarterModuleQuotedDescriptionParses feeds a description
+// containing a double quote, a backslash, and a newline through the same
+// parse sweep as TestGenerateStarterModuleGoFilesParse. ModuleDescription is
+// spliced into module.go via %q (see starterTokens), so this guards against
+// that escaping ever producing invalid Go source.
+func TestGenerateStarterModuleQuotedDescriptionParses(t *testing.T) {
+	res, err := GenerateStarterModule(StarterModuleOptions{
+		Name:        "notes",
+		Description: "a \"tricky\" description with a backslash \\ and a\nnewline",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertGoFilesParse(t, res)
+}
+
+func assertGoFilesParse(t *testing.T, res ModuleResult) {
+	t.Helper()
 	fset := token.NewFileSet()
 	for _, f := range res.Files {
 		if !strings.HasSuffix(f.Path, ".go") {

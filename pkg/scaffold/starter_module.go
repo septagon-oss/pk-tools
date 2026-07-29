@@ -52,7 +52,7 @@ func GenerateStarterModule(opts StarterModuleOptions) (ModuleResult, error) {
 		description = defaultStarterModuleDescription
 	}
 	pascal := ToPascalCase(name)
-	display := starterModuleDisplayName(name)
+	display := moduleDisplayName(name)
 
 	dir := name + "/"
 	snippet := renderStarterRegistrationSnippet(name)
@@ -96,23 +96,6 @@ func validateStarterModuleOptions(opts StarterModuleOptions) error {
 		return fmt.Errorf("starter module name %q must match ^[a-z][a-z0-9_]*$ (lowercase snake_case)", opts.Name)
 	}
 	return nil
-}
-
-// starterModuleDisplayName turns a snake_case module name into a spaced
-// Pascal display name, e.g. "expense_notes" -> "Expense Notes".
-func starterModuleDisplayName(name string) string {
-	parts := strings.Split(name, "_")
-	words := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if part == "" {
-			continue
-		}
-		words = append(words, strings.ToUpper(part[:1])+part[1:])
-	}
-	if len(words) == 0 {
-		return name
-	}
-	return strings.Join(words, " ")
 }
 
 // formatStarterGo canonicalizes generated Go source with gofmt so emitted
@@ -235,7 +218,9 @@ package __NAME__
 // lookup by id returns ErrNotFound rather than leaking existence.
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 )
@@ -244,6 +229,17 @@ import (
 // requesting tenant — including when the row exists but belongs to a
 // different tenant.
 var ErrNotFound = errors.New("__NAME__: not found")
+
+// newID returns a random 32-character hex identifier for a new __NAME__ row.
+// It uses crypto/rand rather than a timestamp so IDs are unguessable and
+// collision-free without a coordinated clock.
+func newID() (string, error) {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("__NAME__: generate id: %w", err)
+	}
+	return hex.EncodeToString(buf), nil
+}
 
 // __PASCAL__ is a single tenant-scoped __NAME__ row.
 type __PASCAL__ struct {
@@ -269,11 +265,19 @@ func NewStore(db *sql.DB) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
-// Create inserts a new __NAME__ row. The caller (Handler) is responsible for
-// assigning TenantID and OwnerID from the authenticated principal, never
-// from client input.
+// Create inserts a new __NAME__ row, assigning a fresh random ID (see
+// newID) and overwriting any ID the caller supplied — a client can never
+// choose its own id. The caller (Handler) is responsible for assigning
+// TenantID and OwnerID from the authenticated principal, never from client
+// input.
 func (s *Store) Create(item *__PASCAL__) error {
-	_, err := s.db.Exec(
+	id, err := newID()
+	if err != nil {
+		return err
+	}
+	item.ID = id
+
+	_, err = s.db.Exec(
 		` + "`INSERT INTO __PLURAL__ (id, tenant_id, owner_id, name, created_at) VALUES (?, ?, ?, ?, ?)`" + `,
 		item.ID, item.TenantID, item.OwnerID, item.Name, item.CreatedAt,
 	)
@@ -342,7 +346,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -379,14 +382,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, items, err)
 	case id == "" && r.Method == http.MethodPost:
 		var item __PASCAL__
-		if json.NewDecoder(r.Body).Decode(&item) != nil || strings.TrimSpace(item.Name) == "" {
+		if err := json.NewDecoder(r.Body).Decode(&item); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		if strings.TrimSpace(item.Name) == "" {
 			http.Error(w, "name is required", http.StatusBadRequest)
 			return
 		}
 		item.TenantID, item.OwnerID = tenant, owner // server owns identity
-		item.ID = strconv.FormatInt(time.Now().UnixNano(), 36)
 		item.CreatedAt = time.Now().UTC().Format(time.RFC3339)
-		writeJSON(w, http.StatusCreated, &item, h.store.Create(&item))
+		writeJSON(w, http.StatusCreated, &item, h.store.Create(&item)) // Create assigns item.ID
 	case id != "" && r.Method == http.MethodGet:
 		item, err := h.store.Get(tenant, id)
 		writeJSON(w, http.StatusOK, item, err)
@@ -401,7 +407,10 @@ func writeJSON(w http.ResponseWriter, status int, v any, err error) {
 		return
 	}
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		// err is never written to the client: it may carry internal detail
+		// (driver messages, file paths). Callers that need it server-side
+		// (logs, metrics) should capture it before calling writeJSON.
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -449,28 +458,31 @@ func newTestStore(t *testing.T) *Store {
 
 func TestStoreCreateAndList(t *testing.T) {
 	store := newTestStore(t)
-	item := &__PASCAL__{ID: "1", TenantID: "tenant_a", OwnerID: "user_a", Name: "first", CreatedAt: "now"}
+	item := &__PASCAL__{TenantID: "tenant_a", OwnerID: "user_a", Name: "first", CreatedAt: "now"}
 	if err := store.Create(item); err != nil {
 		t.Fatalf("create: %v", err)
+	}
+	if item.ID == "" {
+		t.Fatal("Create() did not assign an ID")
 	}
 
 	items, err := store.List("tenant_a")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if len(items) != 1 || items[0].ID != "1" {
-		t.Fatalf("List(tenant_a) = %+v, want one row with id 1", items)
+	if len(items) != 1 || items[0].ID != item.ID {
+		t.Fatalf("List(tenant_a) = %+v, want one row with id %q", items, item.ID)
 	}
 }
 
 func TestStoreGet(t *testing.T) {
 	store := newTestStore(t)
-	item := &__PASCAL__{ID: "2", TenantID: "tenant_a", OwnerID: "user_a", Name: "second", CreatedAt: "now"}
+	item := &__PASCAL__{TenantID: "tenant_a", OwnerID: "user_a", Name: "second", CreatedAt: "now"}
 	if err := store.Create(item); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
-	got, err := store.Get("tenant_a", "2")
+	got, err := store.Get("tenant_a", item.ID)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -481,13 +493,13 @@ func TestStoreGet(t *testing.T) {
 
 func TestStoreGetCrossTenantMiss(t *testing.T) {
 	store := newTestStore(t)
-	item := &__PASCAL__{ID: "3", TenantID: "tenant_a", OwnerID: "user_a", Name: "third", CreatedAt: "now"}
+	item := &__PASCAL__{TenantID: "tenant_a", OwnerID: "user_a", Name: "third", CreatedAt: "now"}
 	if err := store.Create(item); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
-	if _, err := store.Get("tenant_b", "3"); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("Get(tenant_b, 3) error = %v, want ErrNotFound", err)
+	if _, err := store.Get("tenant_b", item.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get(tenant_b, %s) error = %v, want ErrNotFound", item.ID, err)
 	}
 }
 `
