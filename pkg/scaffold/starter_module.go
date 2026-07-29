@@ -127,19 +127,35 @@ func formatStarterGo(path, src string) (string, error) {
 	return string(formatted), nil
 }
 
+// starterPluralize returns the naturally pluralized resource-name form used
+// for the module's table name and REST route. name is returned unchanged
+// when it already ends in "s" (e.g. "notes", "status" -> unchanged, no
+// double pluralization), and "s" is appended otherwise (e.g. "note" ->
+// "notes", "widget" -> "widgets").
+func starterPluralize(name string) string {
+	if strings.HasSuffix(name, "s") {
+		return name
+	}
+	return name + "s"
+}
+
 // starterTokens replaces the template placeholders shared by every generated
 // starter-module file. name is validated snake_case ([a-z][a-z0-9_]*), so it
 // is always safe to splice directly into both Go identifiers/string literals
-// and SQL/URL fragments; pascal is derived from it the same way. description
-// is free text supplied by the caller, so it is pre-quoted with %q before
-// substitution and the template must place __DESC_Q__ where a quoted Go
-// string literal belongs (no surrounding quotes in the template itself).
+// and SQL/URL fragments; pascal is derived from it the same way. plural is
+// the naturally pluralized resource form (starterPluralize) used for the
+// table name and REST route so a name already ending in "s" is not
+// double-pluralized. description is free text supplied by the caller, so it
+// is pre-quoted with %q before substitution and the template must place
+// __DESC_Q__ where a quoted Go string literal belongs (no surrounding quotes
+// in the template itself).
 func starterTokens(name, pascal, display, description string) *strings.Replacer {
 	return strings.NewReplacer(
 		"__NAME__", name,
 		"__PASCAL__", pascal,
 		"__DISPLAY__", display,
 		"__DESC_Q__", fmt.Sprintf("%q", description),
+		"__PLURAL__", starterPluralize(name),
 	)
 }
 
@@ -246,7 +262,7 @@ type Store struct {
 // NewStore opens the __NAME__ store on db, creating its table if it does not
 // already exist.
 func NewStore(db *sql.DB) (*Store, error) {
-	_, err := db.Exec(` + "`CREATE TABLE IF NOT EXISTS __NAME__s (\n\t\tid TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, owner_id TEXT NOT NULL,\n\t\tname TEXT NOT NULL, created_at TEXT NOT NULL)`" + `)
+	_, err := db.Exec(` + "`CREATE TABLE IF NOT EXISTS __PLURAL__ (\n\t\tid TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, owner_id TEXT NOT NULL,\n\t\tname TEXT NOT NULL, created_at TEXT NOT NULL)`" + `)
 	if err != nil {
 		return nil, fmt.Errorf("__NAME__: schema: %w", err)
 	}
@@ -258,7 +274,7 @@ func NewStore(db *sql.DB) (*Store, error) {
 // from client input.
 func (s *Store) Create(item *__PASCAL__) error {
 	_, err := s.db.Exec(
-		` + "`INSERT INTO __NAME__s (id, tenant_id, owner_id, name, created_at) VALUES (?, ?, ?, ?, ?)`" + `,
+		` + "`INSERT INTO __PLURAL__ (id, tenant_id, owner_id, name, created_at) VALUES (?, ?, ?, ?, ?)`" + `,
 		item.ID, item.TenantID, item.OwnerID, item.Name, item.CreatedAt,
 	)
 	return err
@@ -267,7 +283,7 @@ func (s *Store) Create(item *__PASCAL__) error {
 // List returns every __NAME__ row for tenantID, ordered by id.
 func (s *Store) List(tenantID string) ([]*__PASCAL__, error) {
 	rows, err := s.db.Query(
-		` + "`SELECT id, tenant_id, owner_id, name, created_at FROM __NAME__s WHERE tenant_id = ? ORDER BY id`" + `,
+		` + "`SELECT id, tenant_id, owner_id, name, created_at FROM __PLURAL__ WHERE tenant_id = ? ORDER BY id`" + `,
 		tenantID,
 	)
 	if err != nil {
@@ -293,7 +309,7 @@ func (s *Store) List(tenantID string) ([]*__PASCAL__, error) {
 func (s *Store) Get(tenantID, id string) (*__PASCAL__, error) {
 	item := &__PASCAL__{}
 	err := s.db.QueryRow(
-		` + "`SELECT id, tenant_id, owner_id, name, created_at FROM __NAME__s WHERE id = ? AND tenant_id = ?`" + `,
+		` + "`SELECT id, tenant_id, owner_id, name, created_at FROM __PLURAL__ WHERE id = ? AND tenant_id = ?`" + `,
 		id, tenantID,
 	).Scan(&item.ID, &item.TenantID, &item.OwnerID, &item.Name, &item.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -346,8 +362,8 @@ func NewHandler(store *Store) *Handler {
 // RegisterRoutes mounts the __NAME__ routes for
 // starterapp.ModulePlugin.RegisterRoutes.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
-	mux.Handle("/api/v1/__NAME__s", h)
-	mux.Handle("/api/v1/__NAME__s/", h)
+	mux.Handle("/api/v1/__PLURAL__", h)
+	mux.Handle("/api/v1/__PLURAL__/", h)
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -356,7 +372,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return // 401 written by RequestActor
 	}
 
-	id := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/api/v1/__NAME__s"), "/")
+	id := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/api/v1/__PLURAL__"), "/")
 	switch {
 	case id == "" && r.Method == http.MethodGet:
 		items, err := h.store.List(tenant)

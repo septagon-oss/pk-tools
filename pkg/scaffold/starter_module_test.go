@@ -1,4 +1,4 @@
-// Implements: REQ-002.
+// Validates: REQ-002.
 // Per: ADR-0029 (file purpose declaration).
 // Discipline: C-14.
 
@@ -58,13 +58,63 @@ func TestGenerateStarterModuleEmitsStarterShape(t *testing.T) {
 		"func (m *Module) HTTPHandler()",
 		"portslib.RequestActor",
 		"starterapp.WithModules",
+		`CREATE TABLE IF NOT EXISTS notes (`,
+		`/api/v1/notes"`,
 	} {
 		if !strings.Contains(joined, symbol) {
 			t.Errorf("generated output missing %q", symbol)
 		}
 	}
+	if strings.Contains(joined, "notess") {
+		t.Error("generated output must not double-pluralize a name already ending in \"s\" (found \"notess\")")
+	}
 	if res.RegistrationCode["snippet"] == "" {
 		t.Error("registration snippet is empty")
+	}
+}
+
+func TestGenerateStarterModulePluralizesNaturally(t *testing.T) {
+	// "notes" already ends in "s": table and routes must stay "notes", not
+	// double-pluralize to "notess".
+	notesRes, err := GenerateStarterModule(StarterModuleOptions{Name: "notes", Description: "d"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	notesJoined := allContent(notesRes)
+	if !strings.Contains(notesJoined, `CREATE TABLE IF NOT EXISTS notes (`) {
+		t.Error(`name "notes": expected table "notes"`)
+	}
+	if !strings.Contains(notesJoined, `/api/v1/notes"`) {
+		t.Error(`name "notes": expected route "/api/v1/notes"`)
+	}
+	if strings.Contains(notesJoined, "notess") {
+		t.Error(`name "notes": must not double-pluralize to "notess"`)
+	}
+
+	// "note" does not end in "s": table and routes must pluralize to "notes".
+	noteRes, err := GenerateStarterModule(StarterModuleOptions{Name: "note", Description: "d"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	noteJoined := allContent(noteRes)
+	if !strings.Contains(noteJoined, `CREATE TABLE IF NOT EXISTS notes (`) {
+		t.Error(`name "note": expected table "notes"`)
+	}
+	if !strings.Contains(noteJoined, `/api/v1/notes"`) {
+		t.Error(`name "note": expected route "/api/v1/notes"`)
+	}
+
+	// "status" already ends in "s": route must stay "/api/v1/status".
+	statusRes, err := GenerateStarterModule(StarterModuleOptions{Name: "status", Description: "d"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	statusJoined := allContent(statusRes)
+	if !strings.Contains(statusJoined, `/api/v1/status"`) {
+		t.Error(`name "status": expected route "/api/v1/status"`)
+	}
+	if strings.Contains(statusJoined, "statuss") {
+		t.Error(`name "status": must not double-pluralize to "statuss"`)
 	}
 }
 
