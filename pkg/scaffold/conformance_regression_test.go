@@ -44,18 +44,22 @@ func TestScaffoldedModuleIsBornConformant(t *testing.T) {
 		return c
 	}
 
-	// Invariant #8 — modern dependency declaration; the removed legacy API must
-	// never be emitted (it does not compile against current backend-kit).
+	// Invariant #8 — modern dependency declaration; removed legacy APIs must
+	// never be emitted (they do not compile against current backend-kit, and
+	// standard.WithDep belongs to the retired composer lane).
 	for path, content := range files {
 		if strings.Contains(content, "WithCategorizedDep") {
-			t.Errorf("%s emits removed standard.WithCategorizedDep; use WithDep(RequiresPort[...])", path)
+			t.Errorf("%s emits removed standard.WithCategorizedDep; declare platform.PortDecl entries", path)
+		}
+		if strings.Contains(content, "standard.WithDep") {
+			t.Errorf("%s emits legacy standard.WithDep; declare platform.PortDecl entries", path)
 		}
 		if strings.Contains(content, ":view") {
 			t.Errorf("%s emits retired permission verb view; use read", path)
 		}
 	}
-	if deps := get("dependencies.go"); !strings.Contains(deps, "standard.WithDep(module.RequiresPort[") {
-		t.Errorf("dependencies.go must use standard.WithDep(module.RequiresPort[...]); got:\n%s", deps)
+	if deps := get("dependencies.go"); !strings.Contains(deps, "func moduleRequiredPorts() []platform.PortDecl") {
+		t.Errorf("dependencies.go must declare moduleRequiredPorts() []platform.PortDecl; got:\n%s", deps)
 	}
 
 	// authz: conformance reads tokens via static AST, so a []string LITERAL must be
@@ -95,6 +99,75 @@ func TestScaffoldedModuleIsBornConformant(t *testing.T) {
 	}
 	if mod := get("module.go"); !strings.Contains(mod, `ModuleVersion     = "1.0.0"`) {
 		t.Errorf("module.go ModuleVersion must be 1.0.0 to match the manifest")
+	}
+}
+
+// TestScaffoldedModuleUsesDescriptorComposition locks module.go to the
+// descriptor composition lane: pkdef.Define(pkdef.StandardRuntime(
+// platform.ModuleDescriptor{...})). The internal repository enforces an
+// only-shrinking ledger of legacy standard.NewComposer call sites
+// (composer_convergence.go, ADR-0047), so a newly scaffolded module that
+// emits NewComposer fails `make check-composer-convergence` on arrival.
+func TestScaffoldedModuleUsesDescriptorComposition(t *testing.T) {
+	result := mustGenerateModule(t, ModuleOptions{
+		Name:        "drift_probe_management",
+		Description: "Scaffold drift probe.",
+		Category:    "workspace",
+		Archetype:   "service",
+		Features:    []string{"widgets"},
+	})
+
+	files := map[string]string{}
+	for _, f := range result.Files {
+		files[f.Path] = f.Content
+	}
+	moduleGo, ok := files["module.go"]
+	if !ok {
+		t.Fatal("scaffold did not produce module.go")
+	}
+
+	for _, needle := range []string{
+		"pkdef.Define(",
+		"platform.ModuleDescriptor{",
+		"platformfx.DescriptorModule",
+		"NewRuntimeForEnvironment",
+	} {
+		if !strings.Contains(moduleGo, needle) {
+			t.Errorf("module.go must contain %q — descriptor composition shape", needle)
+		}
+	}
+	// Service archetype: migrations stay descriptor-owned.
+	for _, needle := range []string{
+		"//go:embed migrations/*",
+		"Migrations: platform.SQLAssets{FS: migrationsFS, Dir: \"migrations\"},",
+	} {
+		if !strings.Contains(moduleGo, needle) {
+			t.Errorf("module.go must contain %q — descriptor-owned migrations", needle)
+		}
+	}
+	for path, content := range files {
+		if strings.Contains(content, "standard.NewComposer") {
+			t.Errorf("%s emits legacy standard.NewComposer — new modules must be descriptor-composed", path)
+		}
+	}
+
+	// Registry archetype: no migrations embed, still descriptor-composed.
+	registry := mustGenerateModule(t, ModuleOptions{
+		Name:        "probe_registry",
+		Description: "Registry probe.",
+		Category:    "workspace",
+		Archetype:   "registry",
+	})
+	for _, f := range registry.Files {
+		if f.Path != "module.go" {
+			continue
+		}
+		if !strings.Contains(f.Content, "pkdef.Define(") {
+			t.Error("registry module.go must be descriptor-composed")
+		}
+		if strings.Contains(f.Content, "embed.FS") || strings.Contains(f.Content, "platform.SQLAssets") {
+			t.Error("registry module.go must not embed migrations")
+		}
 	}
 }
 

@@ -234,8 +234,6 @@ func TestGenerateModule(t *testing.T) {
 		"contracts/provides/doc.go",
 		"dependencies.go",
 		"features/README.md",
-		"invocations.go",
-		"metadata.go",
 		"migrations/README.md",
 		"module.go",
 		"module_smoke_test.go",
@@ -250,7 +248,10 @@ func TestGenerateModule(t *testing.T) {
 		"contracts/events.go",
 		"contracts/providers.go",
 		"contracts/routes.go",
+		"entity_permissions.go",
 		"events.go",
+		"invocations.go",
+		"metadata.go",
 		"migrations/001_initial.up.sql",
 		"migrations/001_initial.down.sql",
 		"settings_provider.go",
@@ -312,7 +313,7 @@ func TestGenerateModuleAppliesImportProfile(t *testing.T) {
 
 	for _, needle := range []string{
 		"github.com/acme/platformkit-backend-kit/app/module",
-		"github.com/acme/platformkit-business-modules/billing_management/features/subscriptions",
+		"github.com/acme/platformkit-business-modules/internal/pkdef",
 		"github.com/acme/platformkit-business-modules/billing_management",
 	} {
 		if !strings.Contains(combined.String(), needle) {

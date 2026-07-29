@@ -85,15 +85,12 @@ func generateModuleFiles(opts ModuleOptions) []GeneratedFile {
 	modulePorts := normalizePortNames(ports)
 
 	files := []GeneratedFile{
-		{Path: "module.go", Content: renderModuleGo(name, description, category, pascalName, moduleTags, archetype)},
+		{Path: "module.go", Content: renderModuleGo(name, description, category, pascalName, moduleTags, archetype, moduleFeatures)},
 		{Path: "transactions.go", Content: renderModuleTransactionsGo(name)},
 		{Path: "jobs.go", Content: renderModuleJobsGo(name)},
-		{Path: "metadata.go", Content: renderModuleMetadataGo(name, moduleFeatures)},
 		{Path: "dependencies.go", Content: renderModuleDependenciesGo(name, modulePorts)},
-		{Path: "invocations.go", Content: renderModuleInvocationsGo(name, pascalName)},
 		{Path: "surfaces.go", Content: renderModuleSurfacesGo(name, displayName, pascalName, resourceKebab)},
 		{Path: "authz.go", Content: renderModuleAuthzGo(name)},
-		{Path: "entity_permissions.go", Content: renderModuleEntityPermissionsGo(name)},
 		{Path: "README.md", Content: renderModuleReadme(name, description, category, archetype, moduleTags, moduleFeatures)},
 		{Path: "module_smoke_test.go", Content: renderModuleSmokeTestGo(name)},
 		{Path: "module.manifest.yaml", Content: renderModuleManifestYAML(name, description, category, resourceName, moduleTags, moduleFeatures, modulePorts)},
@@ -299,32 +296,36 @@ func needsModuleMigrations(archetype string) bool {
 	}
 }
 
-func renderModuleGo(name, description, category, pascalName string, tags []string, archetype string) string {
+func renderModuleGo(name, description, category, pascalName string, tags []string, archetype string, features []string) string {
 	var imports []string
-	imports = append(imports, `"example.com/platformkit/backend-kit/app/module"`)
 	imports = append(imports, `"example.com/platformkit/backend-kit/app/module/providers/standard"`)
-	imports = append(imports, `"example.com/platformkit/business-modules/ports"`)
-		imports = append(imports, `portsurface "github.com/septagon-oss/pk-ui/surface"`)
-	imports = append(imports, `"go.uber.org/fx"`)
+	imports = append(imports, `"example.com/platformkit/backend-kit/app/platform"`)
+	imports = append(imports, `"example.com/platformkit/backend-kit/app/platformfx"`)
+	imports = append(imports, `"example.com/platformkit/business-modules/internal/pkdef"`)
+	if len(features) > 0 {
+		// Feature descriptors reference contracts.ModulePermissions().
+		imports = append(imports, fmt.Sprintf(`"example.com/platformkit/business-modules/%s/contracts"`, name))
+	}
 	if needsModuleMigrations(archetype) {
 		imports = append([]string{`"embed"`}, imports...)
 	}
 
 	tagLiterals := quoteList(tags)
 
-	migrationsBlock := ""
+	migrationsEmbed := ""
+	migrationsField := ""
+	// gofmt aligns the Requires/Migrations values when both fields are
+	// present, so the emitted padding must match.
+	requiresField := "\tRequires: moduleRequiredPorts(),\n"
 	if needsModuleMigrations(archetype) {
-		migrationsBlock = `//go:embed migrations/*
-var migrationsFS embed.FS
-
-func init() {
-	module.RegisterModuleMigrations(ModuleName, migrationsFS, "migrations")
-}
-
-`
+		migrationsEmbed = "//go:embed migrations/*\nvar migrationsFS embed.FS\n\n"
+		migrationsField = "\tMigrations: platform.SQLAssets{FS: migrationsFS, Dir: \"migrations\"},\n"
+		requiresField = "\tRequires:   moduleRequiredPorts(),\n"
 	}
 
-	header := filePurposeHeader("module.go", "module identity, singleton runtime, and migration embed", "ADR-0017")
+	featuresField := renderModuleFeatureDescriptors(name, features)
+
+	header := filePurposeHeader("module.go", "module identity, descriptor composition source, and migration embed", "ADR-0017", "ADR-0047")
 
 	return fmt.Sprintf(`package %s
 
@@ -345,50 +346,46 @@ const (
 
 var ModuleTags = []string{%s}
 
-// %sModule is the root runtime composition unit for this bounded context.
-type %sModule struct {
-	*standard.ModuleComposer
+%s// %sModule preserves the catalog-facing feature-selection contract while
+// composition is descriptor-materialized.
+type %sModule = platformfx.DescriptorModule
+
+// Descriptor is the single composition source for module identity, typed
+// cross-module dependencies, features, and migrations. The standard shell
+// conventions — translation registration, grouped health, and the admin
+// surface providers — are contributed by pkdef.StandardRuntime and are
+// never wired by hand (ADR-0047).
+var Descriptor = pkdef.Define(pkdef.StandardRuntime(platform.ModuleDescriptor{
+	ID:          ModuleName,
+	Description: ModuleDescription,
+	Version:     ModuleVersion,
+	BasePath:    ModuleBasePath,
+	Category:    ModuleCategory,
+	Author:      ModuleAuthor,
+	License:     ModuleLicense,
+	Tags:        append([]string(nil), ModuleTags...),
+	SupportedModes: []string{
+		"local",
+	},
+%s%s%s}, moduleSurfaceContribution(),
+	// The change gate stays opted out until this module registers real
+	// governed mutations; remove this option once it does.
+	pkdef.WithoutChangeRegistration(),
+))
+
+func newModuleRuntime(options ...platformfx.Option) *standard.Runtime[%sModule] {
+	return standard.NewRuntime(func() %sModule {
+		return pkdef.AsModule(Descriptor, options...)
+	})
 }
 
-var _ module.Module = (*%sModule)(nil)
+var moduleRuntime = newModuleRuntime()
 
-%s// moduleRuntime wraps the module singleton and exposes the standard
-// catalog-shaped helpers (GetModule / NewModule / GetFeatures) as method
-// values, removing the identical per-module wrapper boilerplate. The
-// name avoids collision with the stdlib "runtime" package that some
-// modules import.
-var moduleRuntime = standard.NewRuntime(func() *%sModule {
-	m := &%sModule{
-		ModuleComposer: standard.NewComposer(
-			moduleMetadata(),
-			moduleComposerOptions()...,
-		),
-	}
-
-	// Feed entity read-token gates into the "entity_permissions" fx group
-	// consumed by admin_management.NewAggregatePermissionResolver. The
-	// surface renderer fails closed for any registered row source that
-	// lacks a matching gate (per ADR-0009).
-	m.WithProviders(EntityReadPermissionsProvider())
-
-	// Declarative surface contribution. The fx-group value feeds the admin collector /
-	// validators; the name-tagged typed provider supports interface discovery
-	// without a duplicate-provide error across registrar-less modules.
-	m.WithProviders(
-		fx.Annotate(
-			func() portsurface.Contribution { return moduleSurfaceContribution() },
-			fx.ResultTags(`+"`"+`group:"module_surface_contributions"`+"`"+`),
-		),
-		fx.Annotate(
-			New%sSurfaceContributionProvider,
-			fx.As(new(ports.ModuleSurfaceContributionProvider)),
-			fx.ResultTags(`+"`"+`name:"%s_surface_contribution_provider"`+"`"+`),
-		),
-	)
-
-	registerModuleInvocations(m)
-	return m
-})
+// NewRuntimeForEnvironment returns an isolated descriptor runtime resolved
+// against the selected product environment.
+func NewRuntimeForEnvironment(environment platform.Environment) *standard.Runtime[%sModule] {
+	return newModuleRuntime(platformfx.WithEnvironment(environment))
+}
 
 // GetModule, NewModule, and GetFeatures are the catalog-facing helpers the
 // application composition code references by name (e.g. %s.NewModule).
@@ -397,87 +394,61 @@ var (
 	NewModule   = moduleRuntime.NewModule
 	GetFeatures = moduleRuntime.GetFeatures
 )
-`, name, header, joinImports(imports), name, description, moduleResourceName(name), category, tagLiterals, pascalName, pascalName, pascalName, migrationsBlock, pascalName, pascalName, pascalName, name, name)
+`, name, header, joinImports(imports), name, description, moduleResourceName(name), category, tagLiterals, migrationsEmbed, pascalName, pascalName, requiresField, migrationsField, featuresField, pascalName, pascalName, pascalName, name)
 }
 
-func renderModuleMetadataGo(name string, features []string) string {
-	imports := []string{
-		`"example.com/platformkit/backend-kit/app/module"`,
-		`"example.com/platformkit/backend-kit/app/module/providers/standard"`,
+// renderModuleFeatureDescriptors emits the Descriptor's Features field: one
+// inline platform.FeatureDescriptor literal per scaffolded feature, matching
+// the converged internal convention (feature Category is the module name and
+// permissions come from the contracts package).
+func renderModuleFeatureDescriptors(name string, features []string) string {
+	if len(features) == 0 {
+		return ""
 	}
-
-	var featureImports []string
-	var featureConstructors []string
+	var b strings.Builder
+	b.WriteString("\tFeatures: []platform.FeatureDescriptor{\n")
 	for _, feature := range features {
-		alias := feature
-		featureImports = append(featureImports, fmt.Sprintf(`%s "example.com/platformkit/business-modules/%s/features/%s"`, alias, name, feature))
-		featureConstructors = append(featureConstructors, fmt.Sprintf("%s.New%sFeature()", alias, ToPascalCase(feature)))
+		pascalFeature := ToPascalCase(feature)
+		b.WriteString("\t\t{\n")
+		fmt.Fprintf(&b, "\t\t\tID:          %q,\n", feature)
+		fmt.Fprintf(&b, "\t\t\tName:        %q,\n", pascalFeature)
+		fmt.Fprintf(&b, "\t\t\tDescription: %q,\n", pascalFeature+" feature for "+ToPascalCase(name))
+		b.WriteString("\t\t\tVersion:     ModuleVersion,\n")
+		b.WriteString("\t\t\tCategory:    ModuleName,\n")
+		fmt.Fprintf(&b, "\t\t\tTags:        []string{ModuleName, %q},\n", feature)
+		b.WriteString("\t\t\tPermissions: contracts.ModulePermissions(),\n")
+		b.WriteString("\t\t},\n")
 	}
-	sort.Strings(featureImports)
-
-	if len(featureImports) > 0 {
-		imports = append(imports, featureImports...)
-	}
-
-	featureBlock := ""
-	if len(featureConstructors) > 0 {
-		var b strings.Builder
-		b.WriteString("\t\tstandard.WithFeatures(\n")
-		for _, constructor := range featureConstructors {
-			b.WriteString("\t\t\t")
-			b.WriteString(constructor)
-			b.WriteString(",\n")
-		}
-		b.WriteString("\t\t),\n")
-		featureBlock = b.String()
-	}
-
-	header := filePurposeHeader("metadata.go", "module metadata projection and composer options", "ADR-0017")
-	return fmt.Sprintf(`package %s
-
-%s
-import (
-%s
-)
-
-func moduleMetadata() module.ModuleMetadata {
-	return module.ModuleMetadata{
-		Name:        ModuleName,
-		Description: ModuleDescription,
-		Version:     ModuleVersion,
-		BasePath:    ModuleBasePath,
-		Category:    ModuleCategory,
-		Author:      ModuleAuthor,
-		License:     ModuleLicense,
-		Tags:        append([]string(nil), ModuleTags...),
-	}
-}
-
-func moduleComposerOptions() []standard.ComposerOption {
-	options := []standard.ComposerOption{
-%s	}
-	options = append(options, moduleDependencyOptions()...)
-	return options
-}
-`, name, header, joinImports(imports), featureBlock)
+	b.WriteString("\t},\n")
+	return b.String()
 }
 
 func renderModuleDependenciesGo(name string, extraPorts []string) string {
-	header := filePurposeHeader("dependencies.go", "cross-module dependency declarations via standard.WithDep + module.RequiresPort/OptionalPort", "ADR-0001", "ADR-0009", "ADR-0017")
+	header := filePurposeHeader("dependencies.go", "typed cross-module port dependencies declared as platform.PortDecl entries", "ADR-0001", "ADR-0009", "ADR-0017")
 
-	// Canonical wiring: the admin surface is contributed
-	// declaratively via surface.Contribution (surfaces.go / module.go) and
-	// health via the "health_providers" fx group (invocations.go). Translation
-	// registration is a typed port dependency on translation_management's
-	// published contract.
+	// Standard shell dependencies (translation registration, health, the
+	// admin surface) are implied by pkdef.StandardRuntime; only genuinely
+	// module-specific ports are declared here.
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf(`		standard.WithDep(module.RequiresPort[translationprovides.TranslationRegistrar](module.PortSpec{Purpose: "Register %s translations", Category: module.DependencyCategoryInfrastructure, SubCategory: "i18n", PreferredProvider: "translation_management"})),`, moduleResourceName(name)))
-	b.WriteString("\n")
+	if len(extraPorts) == 0 {
+		b.WriteString("\t\t// Declare typed cross-module dependencies here, e.g.:\n")
+		b.WriteString("\t\t//\n")
+		b.WriteString("\t\t// platform.Port[someprovides.SomeService](platform.PortOpt{\n")
+		b.WriteString("\t\t// \tPurpose:  \"...\",\n")
+		b.WriteString("\t\t// \tProvider: \"some_management\",\n")
+		b.WriteString("\t\t// \tCategory: platform.DependencyCategoryBusiness,\n")
+		b.WriteString("\t\t// }),\n")
+	}
 
 	// Extra ports the operator declared on the command line.
 	for _, p := range extraPorts {
-		b.WriteString(fmt.Sprintf(`		standard.WithDep(module.OptionalPort[ports.%s](module.PortSpec{Purpose: %q, Category: module.DependencyCategoryData, SubCategory: %q})),`, p, moduleDisplayName(name)+" integration through ports."+p, ToSnakeCase(p)))
-		b.WriteString("\n")
+		fmt.Fprintf(&b, "\t\tplatform.Port[ports.%s](platform.PortOpt{\n", p)
+		fmt.Fprintf(&b, "\t\t\tPurpose:     %q,\n", moduleDisplayName(name)+" integration through ports."+p)
+		b.WriteString("\t\t\tOptional:    platform.Optional,\n")
+		fmt.Fprintf(&b, "\t\t\tOnMissing:   %q,\n", moduleDisplayName(name)+" composes without ports."+p)
+		b.WriteString("\t\t\tCategory:    platform.DependencyCategoryData,\n")
+		fmt.Fprintf(&b, "\t\t\tSubCategory: %q,\n", ToSnakeCase(p))
+		b.WriteString("\t\t}),\n")
 	}
 
 	// The ports package is only imported when the operator declared extra ports;
@@ -491,61 +462,19 @@ func renderModuleDependenciesGo(name string, extraPorts []string) string {
 
 %s
 import (
-	"example.com/platformkit/backend-kit/app/module"
-	"example.com/platformkit/backend-kit/app/module/providers/standard"%s
-	translationprovides "example.com/platformkit/business-modules/translation_management/contracts/provides"
+	"example.com/platformkit/backend-kit/app/platform"%s
 )
 
-func moduleDependencyOptions() []standard.ComposerOption {
-	return []standard.ComposerOption{
+// moduleRequiredPorts lists this module's EXPLICIT typed port dependencies
+// (ADR-0009), consumed by the Descriptor's Requires field in module.go.
+// Standard shell conventions — translation registration, grouped health,
+// and the admin surface — are implied by pkdef.StandardRuntime and are
+// never declared here by hand.
+func moduleRequiredPorts() []platform.PortDecl {
+	return []platform.PortDecl{
 %s	}
 }
 `, name, header, portsImport, b.String())
-}
-
-func renderModuleInvocationsGo(name, pascalName string) string {
-	header := filePurposeHeader("invocations.go", "fx invocation registrations for health and translations", "ADR-0001", "ADR-0017")
-
-	return fmt.Sprintf(`package %s
-
-%s
-import (
-	healthprovides "example.com/platformkit/business-modules/health_management/contracts/provides"
-	"example.com/platformkit/business-modules/internal/moduleproviders"
-	translationprovides "example.com/platformkit/business-modules/translation_management/contracts/provides"
-	"go.uber.org/fx"
-)
-
-func registerModuleInvocations(m *%sModule) {
-		// Canonical wiring: the admin surface is contributed
-		// via surface.Contribution (surfaces.go / module.go), health via the
-		// "health_providers" fx group, and translations via the translation
-		// registrar port.
-
-	// Health provider contributed into the "health_providers" fx group; the
-	// health_management module collects and registers it.
-	m.ModuleComposer.WithProviders(fx.Annotate(
-		func() healthprovides.HealthContribution {
-			return healthprovides.HealthContribution{
-				ModuleID: ModuleName,
-				Provider: moduleproviders.NewBasicHealthProvider(
-					ModuleName,
-					ModuleName,
-					ModuleDescription,
-				),
-			}
-		},
-		fx.ResultTags(`+"`"+`group:"health_providers"`+"`"+`),
-	))
-
-	m.ModuleComposer.WithInvocations(func(translationReg translationprovides.TranslationRegistrar) error {
-		return translationReg.RegisterProvider(ModuleName, moduleproviders.NewModuleMetadataTranslationProvider(
-			ModuleName,
-			ModuleDescription,
-		))
-	})
-}
-`, name, header, pascalName)
 }
 
 func renderModuleSurfacesGo(name, displayName, pascalName, resourceKebab string) string {
@@ -561,10 +490,13 @@ import (
 	portsurface "github.com/septagon-oss/pk-ui/surface"
 )
 
-// moduleSurfaceContribution registers this module's admin page. The route ID
-// equals the module name, which is also the canonical section-dispatch key.
-// PagePattern stays Unknown because the default entity-table renderer handles
-// RegisterEntity surfaces until the module supplies an intentional custom view.
+// moduleSurfaceContribution registers this module's admin page. It is passed
+// to pkdef.StandardRuntime in module.go, which publishes the grouped and
+// name-tagged surface providers — no per-module provider boilerplate. The
+// route ID equals the module name, which is also the canonical
+// section-dispatch key. PagePattern stays Unknown because the default
+// entity-table renderer handles RegisterEntity surfaces until the module
+// supplies an intentional custom view.
 func moduleSurfaceContribution() portsurface.Contribution {
 	return ports.CanonicalizeAdminSurfaceContribution(portsurface.Contribution{
 		ModuleID: ModuleName,
@@ -583,34 +515,11 @@ func moduleSurfaceContribution() portsurface.Contribution {
 		},
 	})
 }
-
-// %sSurfaceContributionProvider exposes the module's typed surface contribution.
-type %sSurfaceContributionProvider struct {
-	contribution portsurface.Contribution
-}
-
-func New%sSurfaceContributionProvider() *%sSurfaceContributionProvider {
-	return &%sSurfaceContributionProvider{contribution: moduleSurfaceContribution()}
-}
-
-func (p *%sSurfaceContributionProvider) GetSurfaceContribution() portsurface.Contribution {
-	return p.contribution
-}
-
-// Compile-time guard.
-var _ ports.ModuleSurfaceContributionProvider = (*%sSurfaceContributionProvider)(nil)
 `, name, header,
 		name,
 		resourceKebab,
 		displayName,
 		displayName,
-		pascalName,
-		pascalName,
-		pascalName,
-		pascalName,
-		pascalName,
-		pascalName,
-		pascalName,
 		pascalName,
 	)
 }
@@ -633,43 +542,6 @@ var ModulePermissionTokens = authz.MustNormalizePermissionTokens([]string{
 	%q,
 })
 `, name, header, name+":read", name+":manage")
-}
-
-func renderModuleEntityPermissionsGo(name string) string {
-	header := filePurposeHeader("entity_permissions.go", "read-token gates for entities surfaced by this module", "ADR-0009")
-
-	return fmt.Sprintf(`package %s
-
-%s
-import (
-	"example.com/platformkit/business-modules/ports"
-	"go.uber.org/fx"
-)
-
-// entityReadPermissions declares the read-token gate that admin_management's
-// AggregatePermissionResolver consults before rendering an entity surface.
-// Add an entry to ByEntity for every entity this module exposes — the
-// surface renderer fails closed when a registered row source lacks a
-// matching gate.
-func entityReadPermissions() ports.EntityReadPermissions {
-	return ports.EntityReadPermissions{
-		ModuleID: ModuleName,
-		ByEntity: map[string][]string{
-			// "EntityName": {"%s:read"},
-		},
-	}
-}
-
-// EntityReadPermissionsProvider feeds entityReadPermissions into the
-// "entity_permissions" fx group consumed by
-// admin_management.NewAggregatePermissionResolver.
-func EntityReadPermissionsProvider() any {
-	return fx.Annotate(
-		entityReadPermissions,
-		fx.ResultTags(`+"`"+`group:"entity_permissions"`+"`"+`),
-	)
-}
-`, name, header, name)
 }
 
 func renderModuleReadme(name, description, category, archetype string, tags, features []string) string {
@@ -711,14 +583,11 @@ func renderModuleReadme(name, description, category, archetype string, tags, fea
 		}
 	}
 	b.WriteString("\n## Structure\n\n")
-	b.WriteString("- `module.go`: module identity and runtime entrypoints\n")
-	b.WriteString("- `metadata.go`: module metadata projection and composer options\n")
+	b.WriteString("- `module.go`: module identity and the platform.ModuleDescriptor composition source\n")
 	b.WriteString("- `transactions.go`: transaction-bound state and durable event boundary\n")
 	b.WriteString("- `jobs.go`: typed tenant-aware job and stable schedule helpers\n")
-	b.WriteString("- `dependencies.go`: cross-module dependency declarations\n")
-	b.WriteString("- `invocations.go`: fx wiring for health (group) and translations (registrar)\n")
+	b.WriteString("- `dependencies.go`: typed cross-module port dependencies (platform.PortDecl)\n")
 	b.WriteString("- `surfaces.go`: declarative admin surface contribution (ADR-0001)\n")
-	b.WriteString("- `entity_permissions.go`: read-token gates for surfaced entities\n")
 	b.WriteString("- `module.manifest.yaml`: declared contract for the module catalog\n")
 	b.WriteString("- `contracts/`: exported module contracts and generated roots\n")
 	b.WriteString("- `features/`: internal feature decomposition\n")
@@ -729,7 +598,7 @@ func renderModuleReadme(name, description, category, archetype string, tags, fea
 	b.WriteString("- Cross-module communication must stay behind `platformkit-business-modules/ports` interfaces (ADR-0009).\n")
 	b.WriteString("- Events go through the outbox, not direct event-bus publishes (ADR-0007).\n")
 	b.WriteString("- State changes that emit events should use `TransactionRunner` from `transactions.go`.\n")
-	b.WriteString("- Every emitted event must be declared via `standard.WithEventContract` (ADR-0018).\n")
+	b.WriteString("- Every emitted event must be declared in the Descriptor's `Emits` field (ADR-0018).\n")
 	b.WriteString("- Every public port method must work over both HTTP and NATS eventbus (ADR-0019).\n")
 	b.WriteString("- After adding or changing features, rerun module normalization and verification.\n")
 	return b.String()
@@ -940,7 +809,8 @@ with concrete endpoint definitions; feature.go remains the route metadata source
 of truth. Add a custom section renderer only with a complete, domain-specific
 view contract.
 
-Wire new feature constructors into `+"`metadata.go`"+` via `+"`standard.WithFeatures(...)`"+`.
+List every feature as a `+"`platform.FeatureDescriptor`"+` entry in the
+Descriptor's `+"`Features`"+` field in `+"`module.go`"+`.
 `, name)
 }
 
