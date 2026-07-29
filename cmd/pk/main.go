@@ -39,10 +39,11 @@ func newRootCmd() *cobra.Command {
 		Short: "PlatformKit OSS developer CLI",
 		Long: "pk is the developer CLI for PlatformKit OSS.\n\n" +
 			"Run `pk doctor` to verify your environment, `pk verify` to run tests, " +
-			"and `pk explain modules` to inspect the OSS module catalog.",
+			"`pk explain modules` to inspect the OSS module catalog, and " +
+			"`pk new module` to generate a custom module for the starter.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-	root.AddCommand(newDoctorCmd(), newVerifyCmd(), newExplainCmd(), newDesignCmd())
+	root.AddCommand(newDoctorCmd(), newVerifyCmd(), newExplainCmd(), newDesignCmd(), newNewCmd())
 	return root
 }
