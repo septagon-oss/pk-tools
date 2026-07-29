@@ -1,11 +1,11 @@
-// Validates: REQ-015.
-// Per: ADR-0029 (file purpose declaration).
-// Discipline: C-14.
-
 package main
 
 // new_test.go verifies the `pk new module` command: dry-run listing, real
 // generation into --dir, overwrite refusal, and name validation.
+//
+// Validates: REQ-015.
+// Per: ADR-0029 (file purpose declaration).
+// Discipline: C-14.
 
 import (
 	"bytes"
@@ -54,13 +54,28 @@ func TestNewModuleWritesAndPrintsSnippet(t *testing.T) {
 	if !strings.Contains(out, "starterapp.WithModules") {
 		t.Errorf("output missing registration snippet:\n%s", out)
 	}
-	if _, err := runPk(t, "new", "module", "--name", "notes", "--dir", dir); err == nil {
-		t.Error("second run must refuse to overwrite")
+}
+
+func TestNewModuleRefusesOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := runPk(t, "new", "module", "--name", "notes", "--dir", dir); err != nil {
+		t.Fatal(err)
+	}
+	_, err := runPk(t, "new", "module", "--name", "notes", "--dir", dir)
+	if err == nil {
+		t.Fatal("second run must refuse to overwrite")
+	}
+	if !strings.Contains(err.Error(), "refusing to overwrite") {
+		t.Errorf("error = %q, want it to contain %q", err.Error(), "refusing to overwrite")
 	}
 }
 
 func TestNewModuleRejectsBadName(t *testing.T) {
-	if _, err := runPk(t, "new", "module", "--name", "Notes", "--dir", t.TempDir()); err == nil {
-		t.Error("expected validation error for PascalCase name")
+	_, err := runPk(t, "new", "module", "--name", "Notes", "--dir", t.TempDir())
+	if err == nil {
+		t.Fatal("expected validation error for PascalCase name")
+	}
+	if !strings.Contains(err.Error(), "snake_case") {
+		t.Errorf("error = %q, want it to contain %q", err.Error(), "snake_case")
 	}
 }

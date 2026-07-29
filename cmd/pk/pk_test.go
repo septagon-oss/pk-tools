@@ -1,9 +1,9 @@
 package main
 
-// pk_test.go contains smoke tests for the doctor, verify, and explain
-// subcommands. They exercise the command surface through the cobra wiring
-// rather than forking subprocesses so they run quickly and deterministically
-// in CI.
+// pk_test.go contains smoke tests for the doctor, verify, explain, design,
+// and new subcommands. They exercise the command surface through the cobra
+// wiring rather than forking subprocesses so they run quickly and
+// deterministically in CI.
 //
 // Validates: REQ-015.
 // Per: ADR-0029 (file purpose declaration).
@@ -198,7 +198,7 @@ func TestRootCommandIncludesAllSubcommands(t *testing.T) {
 	for _, c := range root.Commands() {
 		subs[c.Name()] = true
 	}
-	for _, want := range []string{"doctor", "verify", "explain", "design"} {
+	for _, want := range []string{"doctor", "verify", "explain", "design", "new"} {
 		if !subs[want] {
 			t.Fatalf("missing subcommand %q; have %v", want, subs)
 		}

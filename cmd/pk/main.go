@@ -4,8 +4,8 @@ package main
 // Per: ADR-0021.
 // Discipline: C-14.
 // main.go is the entry point for the `pk` OSS CLI binary. It wires the
-// cobra root command, registers the doctor/verify/explain subcommands, and
-// installs a signal-aware context for cancellation.
+// cobra root command, registers the doctor/verify/explain/design/new
+// subcommands, and installs a signal-aware context for cancellation.
 //
 // ADR: ADR-0029 (file purpose declaration).
 // Convention: C-14 (every Go file declares its purpose).

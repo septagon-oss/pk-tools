@@ -62,7 +62,7 @@ func newNewModuleCmd() *cobra.Command {
 	}
 	c.Flags().StringVar(&name, "name", "", "module name in snake_case (required)")
 	c.Flags().StringVar(&description, "description", "", "one-line module description")
-	c.Flags().StringVar(&dir, "dir", ".", "directory to generate into")
+	c.Flags().StringVar(&dir, "dir", ".", "parent directory for the generated module package")
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "print what would be generated without writing")
 	_ = c.MarkFlagRequired("name")
 	return c
