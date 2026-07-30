@@ -3,8 +3,8 @@ module github.com/septagon-oss/pk-tools
 go 1.26
 
 require (
-	github.com/septagon-oss/pk-design v0.2.0
-	github.com/septagon-oss/pk-modules v0.15.0
+	github.com/septagon-oss/pk-design v0.3.0
+	github.com/septagon-oss/pk-modules v0.18.0
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/mod v0.38.0
 )
@@ -27,4 +27,7 @@ require (
 	modernc.org/sqlite v1.54.0 // indirect
 )
 
-retract v0.0.0 // broken: contained local replace directives
+retract (
+	[v0.3.0, v0.3.1] // broken: pinned pk-modules v0.15.0, which lacks pkg/branding that cmd/pk imports
+	v0.0.0 // broken: contained local replace directives
+)
