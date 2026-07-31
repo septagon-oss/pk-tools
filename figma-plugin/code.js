@@ -26,6 +26,35 @@ const SOLUTION_PAGE_PREFIX = "10 Solution · ";
 const TOKEN_STORAGE_KEY = "platformkit.governed-token-bundle.v2";
 const TOKEN_ROOT_CHUNK_PREFIX = "governedTokenBundle";
 const TOKEN_ROOT_CHUNK_SIZE = 48000;
+
+// Component style round trip. Styles are carried as CSS declaration values, so
+// the payload is independent of how a component's renderer branches or loops —
+// which is what lets it serve every component rather than the subset a
+// structural model can express.
+const STYLE_SNAPSHOT_SCHEMA = "pk.design.component-styles.v1";
+const STYLE_CHANGESET_SCHEMA = "pk.design.component-style-changes.v1";
+const STYLE_STORAGE_KEY = "platformkit.component-styles.v1";
+const STYLE_ROOT_CHUNK_PREFIX = "componentStyleBaseline";
+
+// A managed node declares which CSS rule it stands for. Without this stamp a
+// node's geometry cannot be attributed to a selector, so unstamped nodes are
+// skipped rather than guessed at.
+const KEY_STYLE_SELECTOR = "pkStyleSelector";
+
+// Figma node geometry mapped onto the CSS properties it represents. The map is
+// deliberately small: every entry round-trips losslessly through a plain
+// numeric pixel value, which is the only kind of edit this protocol claims to
+// carry.
+const STYLE_NODE_PROPERTIES = [
+  { node: "paddingLeft", css: "padding-left", unit: "px" },
+  { node: "paddingRight", css: "padding-right", unit: "px" },
+  { node: "paddingTop", css: "padding-top", unit: "px" },
+  { node: "paddingBottom", css: "padding-bottom", unit: "px" },
+  { node: "itemSpacing", css: "gap", unit: "px" },
+  { node: "cornerRadius", css: "border-radius", unit: "px" },
+  { node: "strokeWeight", css: "border-width", unit: "px" },
+  { node: "fontSize", css: "font-size", unit: "px" },
+];
 const NATIVE_DELIVERY_STORAGE_KEY = "platformkit.native-delivery-contract.v1";
 const NATIVE_DELIVERY_ROOT_CHUNK_PREFIX = "nativeDeliveryContract";
 
@@ -83,6 +112,22 @@ figma.ui.onmessage = async (message) => {
         message: messageText
       });
       figma.notify(`PlatformKit token import failed: ${messageText}`, { error: true });
+    }
+    return;
+  }
+
+  if (message.type === "export-style-changes") {
+    try {
+      const result = await exportStyleChanges({
+        author: stringValue(message.author),
+        reason: stringValue(message.reason),
+      });
+      figma.ui.postMessage({ type: "style-changes-success", result });
+      figma.notify(`Exported ${result.changes} style change(s).`);
+    } catch (error) {
+      const text = error && error.message ? error.message : String(error);
+      figma.ui.postMessage({ type: "style-changes-error", message: text });
+      figma.notify(text, { error: true });
     }
     return;
   }
@@ -2533,4 +2578,205 @@ function stableJSONValue(value) {
 
 function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+// ---------------------------------------------------------------------------
+// Component style round trip
+// ---------------------------------------------------------------------------
+
+// storeStyleBaseline persists the snapshot an export diffs against, using the
+// same chunked-blob scheme the token baseline uses: clientStorage first, with
+// document plugin data as the portable fallback so a file opened on another
+// machine can still be exported from.
+async function storeStyleBaseline(snapshot) {
+  const payload = JSON.stringify(snapshot);
+  await figma.clientStorage.setAsync(STYLE_STORAGE_KEY, snapshot);
+  const chunks = [];
+  for (let index = 0; index < payload.length; index += TOKEN_ROOT_CHUNK_SIZE) {
+    chunks.push(payload.slice(index, index + TOKEN_ROOT_CHUNK_SIZE));
+  }
+  chunks.forEach((chunk, index) => {
+    figma.root.setPluginData(`${STYLE_ROOT_CHUNK_PREFIX}${index}`, chunk);
+  });
+  figma.root.setPluginData(`${STYLE_ROOT_CHUNK_PREFIX}Count`, String(chunks.length));
+  return snapshot;
+}
+
+async function loadStyleBaseline() {
+  const stored = await figma.clientStorage.getAsync(STYLE_STORAGE_KEY);
+  if (stored && typeof stored === "object") {
+    return validateStyleSnapshot(stored);
+  }
+  const count = Number(figma.root.getPluginData(`${STYLE_ROOT_CHUNK_PREFIX}Count`) || "0");
+  if (!Number.isInteger(count) || count < 1 || count > 100) {
+    throw new Error(
+      "No component style baseline is stored in this file. Import the design bundle before exporting style changes.",
+    );
+  }
+  let payload = "";
+  for (let index = 0; index < count; index += 1) {
+    const chunk = figma.root.getPluginData(`${STYLE_ROOT_CHUNK_PREFIX}${index}`);
+    if (!chunk) {
+      throw new Error("The stored component style baseline is incomplete; re-import the design bundle.");
+    }
+    payload += chunk;
+  }
+  return validateStyleSnapshot(JSON.parse(payload));
+}
+
+function validateStyleSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== "object") {
+    throw new Error("component style baseline is not an object");
+  }
+  if (snapshot.schemaVersion !== STYLE_SNAPSHOT_SCHEMA) {
+    throw new Error(`unsupported component style schema ${JSON.stringify(snapshot.schemaVersion)}`);
+  }
+  if (!isNonEmptyStringProperty(snapshot, "stylesheet")) {
+    throw new Error("component style baseline does not name its stylesheet");
+  }
+  if (!Array.isArray(snapshot.styles) || snapshot.styles.length === 0) {
+    throw new Error("component style baseline carries no declarations");
+  }
+  return snapshot;
+}
+
+// styleCoordinate mirrors the Go coordinate exactly; the two sides must agree
+// or a change set cannot be applied.
+function styleCoordinate(value) {
+  const atRule = stringValue(value.atRule);
+  if (atRule === "") {
+    return `${value.selector}|${value.property}`;
+  }
+  return `${atRule}|${value.selector}|${value.property}`;
+}
+
+// formatPixels renders a Figma number the way CSS declares it, so an untouched
+// value compares equal to the baseline rather than looking edited.
+function formatPixels(value) {
+  if (typeof value !== "number" || !isFinite(value)) {
+    return null;
+  }
+  const rounded = Math.round(value * 1000) / 1000;
+  return `${rounded}px`;
+}
+
+// collectStyledNodes walks managed component sets and yields every node that
+// declares which CSS rule it stands for.
+async function collectStyledNodes() {
+  await ensureDocumentLoaded();
+  const found = [];
+  for (const page of figma.root.children) {
+    const nodes = page.findAll
+      ? page.findAll((node) => sharedPluginValue(node, KEY_STYLE_SELECTOR) !== "")
+      : [];
+    for (const node of nodes) {
+      found.push({ selector: sharedPluginValue(node, KEY_STYLE_SELECTOR), node });
+    }
+  }
+  return found;
+}
+
+// readNodeDeclarations reads the CSS declarations one node currently expresses.
+function readNodeDeclarations(selector, node) {
+  const out = [];
+  for (const mapping of STYLE_NODE_PROPERTIES) {
+    if (!Object.prototype.hasOwnProperty.call(node, mapping.node)) {
+      continue;
+    }
+    const formatted = formatPixels(node[mapping.node]);
+    if (formatted === null) {
+      continue;
+    }
+    out.push({ selector, property: mapping.css, value: formatted });
+  }
+  return out;
+}
+
+// exportStyleChanges diffs the document against the stored baseline and emits a
+// pk.design.component-style-changes.v1 payload.
+//
+// Every refusal is collected rather than thrown on first sight: a designer who
+// touched six things wants all six problems at once, not a six-round
+// conversation. This mirrors exportTokenChanges.
+async function exportStyleChanges(options) {
+  const author = stringValue(options && options.author);
+  const reason = stringValue(options && options.reason);
+  if (author === "") {
+    throw new Error("An author is required so the change set records who proposed it.");
+  }
+  if (reason === "") {
+    throw new Error("A reason is required so the change set records why.");
+  }
+
+  const baseline = await loadStyleBaseline();
+  const baseIndex = new Map();
+  for (const value of baseline.styles) {
+    baseIndex.set(styleCoordinate(value), value);
+  }
+
+  const styled = await collectStyledNodes();
+  if (styled.length === 0) {
+    throw new Error(
+      "No managed styled nodes were found. Import the design bundle before exporting style changes.",
+    );
+  }
+
+  const violations = [];
+  const changes = [];
+  const seen = new Set();
+
+  for (const entry of styled) {
+    for (const declaration of readNodeDeclarations(entry.selector, entry.node)) {
+      const coordinate = styleCoordinate(declaration);
+      const before = baseIndex.get(coordinate);
+      if (!before) {
+        // A node expressing a declaration the stylesheet does not own would
+        // become a new CSS rule, which this protocol deliberately cannot make.
+        continue;
+      }
+      if (seen.has(coordinate)) {
+        violations.push(
+          `${coordinate} is expressed by more than one node; the edit cannot be attributed`,
+        );
+        continue;
+      }
+      seen.add(coordinate);
+      if (before.value === declaration.value) {
+        continue;
+      }
+      changes.push({ before, after: { ...before, value: declaration.value } });
+    }
+  }
+
+  if (violations.length > 0) {
+    throw new Error(`Style export refused:\n- ${violations.join("\n- ")}`);
+  }
+  if (changes.length === 0) {
+    throw new Error("No managed component style changes were detected.");
+  }
+
+  changes.sort((left, right) =>
+    styleCoordinate(left.before).localeCompare(styleCoordinate(right.before)),
+  );
+
+  const changeSet = {
+    schemaVersion: STYLE_CHANGESET_SCHEMA,
+    stylesheet: baseline.stylesheet,
+    baseDigest: baseline.digest,
+    provenance: {
+      source: "figma-plugin",
+      generatedAt: new Date().toISOString(),
+      author,
+      reason,
+    },
+    changes,
+  };
+  const filename = `${baseline.stylesheet.replace(/[^a-z0-9.-]+/gi, "-")}-style-changes.json`;
+  return {
+    changes: changes.length,
+    stylesheet: baseline.stylesheet,
+    baseDigest: baseline.digest,
+    filename,
+    payload: `${JSON.stringify(changeSet, null, 2)}\n`,
+  };
 }

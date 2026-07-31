@@ -612,3 +612,150 @@ async function sha256Hex(value) {
     (byte) => byte.toString(16).padStart(2, "0"),
   ).join("");
 }
+
+// --- component style round trip ------------------------------------------
+//
+// These prove the export half of the style loop: what the plugin emits must be
+// exactly what the Go receiver expects, and every ambiguity must be refused in
+// the tool where the designer can still fix it.
+
+function styleBaseline() {
+  return {
+    schemaVersion: "pk.design.component-styles.v1",
+    stylesheet: "collect.css",
+    digest: `sha256:${"a".repeat(64)}`,
+    styles: [
+      { selector: ".pill", property: "padding-left", value: "10px" },
+      { selector: ".pill", property: "gap", value: "4px" },
+      { selector: ".collect-icon", property: "border-radius", value: "8px" },
+    ],
+  };
+}
+
+// styleContext installs a baseline and a page of fake styled nodes. The plugin
+// reads nodes through sharedPluginValue, which tolerates plain objects, so a
+// faithful test needs no Figma runtime.
+function styleContext(nodes, baseline = styleBaseline()) {
+  const context = pluginContext();
+  const store = new Map();
+  context.figma.clientStorage = {
+    async getAsync(key) {
+      return store.get(key);
+    },
+    async setAsync(key, value) {
+      store.set(key, value);
+    },
+  };
+  context.figma.root.setPluginData = () => {};
+  context.figma.root.getPluginData = () => "";
+  context.figma.root.children = [
+    {
+      findAll(predicate) {
+        return nodes.filter(predicate);
+      },
+    },
+  ];
+  context.__baseline = baseline;
+  return context;
+}
+
+function styledNode(selector, properties) {
+  return {
+    getSharedPluginData(namespace, key) {
+      return key === "pkStyleSelector" ? selector : "";
+    },
+    ...properties,
+  };
+}
+
+test("style export emits the coordinate the Go receiver expects", async () => {
+  const context = styleContext([styledNode(".pill", { paddingLeft: 12, itemSpacing: 4 })]);
+  await vm.runInContext("storeStyleBaseline(__baseline)", context);
+
+  const result = await vm.runInContext(
+    `exportStyleChanges({ author: "designer", reason: "roomier pills" })`,
+    context,
+  );
+  const payload = JSON.parse(result.payload);
+
+  assert.equal(payload.schemaVersion, "pk.design.component-style-changes.v1");
+  assert.equal(payload.stylesheet, "collect.css");
+  assert.equal(payload.baseDigest, styleBaseline().digest);
+  assert.equal(payload.changes.length, 1, "only the edited declaration is a change");
+
+  const change = payload.changes[0];
+  assert.equal(change.before.selector, ".pill");
+  assert.equal(change.before.property, "padding-left");
+  assert.equal(change.before.value, "10px");
+  assert.equal(change.after.value, "12px");
+  assert.equal(result.filename, "collect.css-style-changes.json");
+});
+
+test("style export ignores declarations the designer left alone", async () => {
+  const context = styleContext([styledNode(".pill", { paddingLeft: 10, itemSpacing: 4 })]);
+  await vm.runInContext("storeStyleBaseline(__baseline)", context);
+
+  await assert.rejects(
+    () => vm.runInContext(`exportStyleChanges({ author: "d", reason: "r" })`, context),
+    /No managed component style changes were detected/,
+  );
+});
+
+test("style export requires author and reason so a change set records provenance", async () => {
+  const context = styleContext([styledNode(".pill", { paddingLeft: 12 })]);
+  await vm.runInContext("storeStyleBaseline(__baseline)", context);
+
+  await assert.rejects(
+    () => vm.runInContext(`exportStyleChanges({ author: "", reason: "r" })`, context),
+    /author is required/i,
+  );
+  await assert.rejects(
+    () => vm.runInContext(`exportStyleChanges({ author: "d", reason: "  " })`, context),
+    /reason is required/i,
+  );
+});
+
+test("style export refuses when one declaration is expressed by two nodes", async () => {
+  const context = styleContext([
+    styledNode(".pill", { paddingLeft: 12 }),
+    styledNode(".pill", { paddingLeft: 14 }),
+  ]);
+  await vm.runInContext("storeStyleBaseline(__baseline)", context);
+
+  await assert.rejects(
+    () => vm.runInContext(`exportStyleChanges({ author: "d", reason: "r" })`, context),
+    /cannot be attributed/,
+  );
+});
+
+test("style export never proposes a declaration the stylesheet does not own", async () => {
+  // font-size is not in the baseline: emitting it would ask the receiver to
+  // create a CSS rule, which the protocol refuses by design.
+  const context = styleContext([styledNode(".pill", { paddingLeft: 12, fontSize: 18 })]);
+  await vm.runInContext("storeStyleBaseline(__baseline)", context);
+
+  const result = await vm.runInContext(
+    `exportStyleChanges({ author: "d", reason: "r" })`,
+    context,
+  );
+  const payload = JSON.parse(result.payload);
+  assert.equal(payload.changes.length, 1);
+  assert.equal(payload.changes[0].before.property, "padding-left");
+});
+
+test("style export refuses without an imported baseline", async () => {
+  const context = styleContext([styledNode(".pill", { paddingLeft: 12 })]);
+  await assert.rejects(
+    () => vm.runInContext(`exportStyleChanges({ author: "d", reason: "r" })`, context),
+    /Import the design bundle/,
+  );
+});
+
+test("style export refuses when no managed styled nodes exist", async () => {
+  const context = styleContext([]);
+  await vm.runInContext("storeStyleBaseline(__baseline)", context);
+  await assert.rejects(
+    () => vm.runInContext(`exportStyleChanges({ author: "d", reason: "r" })`, context),
+    /No managed styled nodes/,
+  );
+});
