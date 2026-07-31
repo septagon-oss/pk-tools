@@ -720,6 +720,13 @@ function canonicalTokenVariable(variable) {
   if (hasObjectEntries(variable.aliases)) {
     canonical.aliases = canonicalJSONValue(variable.aliases);
   }
+  // Scopes are part of what the compiler signed, so they belong in the
+  // canonical form. Omitting a field the digest covers rejects a bundle that
+  // is in fact intact. Ordered to match the Go encoder: after aliases, before
+  // the binding.
+  if (Array.isArray(variable.scopes) && variable.scopes.length > 0) {
+    canonical.scopes = variable.scopes.map(String);
+  }
   canonical.binding = {
     tokenPath: variable.binding.tokenPath,
     modeMap: canonicalJSONValue(variable.binding.modeMap),
