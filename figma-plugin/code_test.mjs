@@ -485,6 +485,70 @@ test("native delivery schema rejects tampered nested variant identities", async 
   );
 });
 
+test("token export round-trips one writable Figma color to its exact owner", async () => {
+  const { context } = await governedTokenExportContext({
+    writable: true,
+    nativeValue: {
+      r: 0x1d / 255,
+      g: 0x4e / 255,
+      b: 0xd8 / 255,
+      a: 1,
+    },
+  });
+
+  const result = await vm.runInContext(
+    `exportTokenChanges({
+      author: "Designer",
+      reason: "Align the Collect brand primary"
+    })`,
+    context,
+  );
+  const changeSet = JSON.parse(result.payload);
+
+  assert.equal(result.changes, 1);
+  assert.equal(result.profile, "clients/collect");
+  assert.equal(result.filename, "clients-collect-token-changes.json");
+  assert.equal(changeSet.schemaVersion, "pk.design.token-changes.v1");
+  assert.equal(changeSet.baseDigest, context.__bundle.snapshotDigest);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(changeSet.profile)),
+    JSON.parse(JSON.stringify(context.__bundle.snapshot.profile)),
+  );
+  assert.equal(changeSet.provenance.source, "figma-plugin");
+  assert.equal(changeSet.provenance.author, "Designer");
+  assert.equal(changeSet.provenance.reason, "Align the Collect brand primary");
+  assert.equal(changeSet.changes[0].operation, "update");
+  assert.equal(changeSet.changes[0].before.value, "#2563EB");
+  assert.equal(changeSet.changes[0].after.value, "#1D4ED8");
+  assert.deepEqual(
+    changeSet.changes[0].after.origin,
+    changeSet.changes[0].before.origin,
+  );
+});
+
+test("token export rejects edits to inherited read-only variables", async () => {
+  const { context } = await governedTokenExportContext({
+    writable: false,
+    nativeValue: {
+      r: 0x1d / 255,
+      g: 0x4e / 255,
+      b: 0xd8 / 255,
+      a: 1,
+    },
+  });
+
+  await assert.rejects(
+    vm.runInContext(
+      `exportTokenChanges({
+        author: "Designer",
+        reason: "This must remain parent-owned"
+      })`,
+      context,
+    ),
+    /read-only variable "\/client\/brand\/500" mode "Default" was edited/,
+  );
+});
+
 test("plugin validates native nodes without exporting raster snapshots", () => {
   assert.doesNotMatch(source, /\.exportAsync\s*\(/);
   assert.doesNotMatch(source, /figma-native-export/);
@@ -574,6 +638,100 @@ function pluginContext() {
   return context;
 }
 
+async function governedTokenExportContext({ writable, nativeValue }) {
+  const context = pluginContext();
+  const collection = {
+    name: "PlatformKit · collect",
+    modes: [{ name: "Default", modeId: "mode:default" }],
+    variableIds: ["variable:brand-500"],
+  };
+  const variable = {
+    id: "variable:brand-500",
+    name: "brand/500",
+    valuesByMode: {
+      "mode:default": nativeValue,
+    },
+  };
+  context.__bundle = {
+    kind: "figma-variables",
+    schema: "pk.design.figma-variables.v2",
+    product: "PlatformKit · collect",
+    clientId: "collect",
+    snapshotDigest: "",
+    snapshot: {
+      schemaVersion: "pk.design.token-snapshot.v1",
+      profile: {
+        id: "clients/collect",
+        kind: "client",
+        version: "1",
+        clientId: "collect",
+        parentId: "pro",
+        parentDigest: `sha256:${"a".repeat(64)}`,
+      },
+      provenance: {
+        source: "client.yaml",
+        generatedAt: "2026-07-29T00:00:00Z",
+      },
+      tokens: [{
+        path: "/client/brand/500",
+        mode: "default",
+        type: "color",
+        value: "#2563EB",
+        origin: {
+          owner: writable ? "collect" : "pro",
+          layer: writable ? "client" : "pro",
+          sourceUri: writable ? "client.yaml" : "pkds://semantic",
+          pointer: writable ? "/design/brand/500" : "/semantic/color/brand",
+          writable,
+        },
+      }],
+    },
+    collections: [{
+      name: collection.name,
+      modes: ["Default"],
+      variables: [{
+        key: "/client/brand/500",
+        name: variable.name,
+        type: "COLOR",
+        values: {
+          Default: {
+            r: 0x25 / 255,
+            g: 0x63 / 255,
+            b: 0xeb / 255,
+            a: 1,
+          },
+        },
+        binding: {
+          tokenPath: "/client/brand/500",
+          modeMap: { Default: "default" },
+          codecs: writable
+            ? { Default: { kind: "color", style: "hex6-upper" } }
+            : undefined,
+          writable,
+        },
+      }],
+    }],
+  };
+  context.__bundle.snapshotDigest = await vm.runInContext(
+    "digestTokenSnapshot(__bundle.snapshot)",
+    context,
+  );
+  context.figma.clientStorage = {
+    async getAsync() {
+      return JSON.stringify(context.__bundle);
+    },
+  };
+  context.figma.variables = {
+    async getLocalVariableCollectionsAsync() {
+      return [collection];
+    },
+    async getVariableByIdAsync(id) {
+      return id === variable.id ? variable : null;
+    },
+  };
+  return { context, collection, variable };
+}
+
 function validFixture() {
   return {
     id: "platformkit.component/test-page#test-page-default",
@@ -612,3 +770,141 @@ async function sha256Hex(value) {
     (byte) => byte.toString(16).padStart(2, "0"),
   ).join("");
 }
+
+// --- SHA-256 fallback ------------------------------------------------------
+//
+// Figma's plugin sandbox provides no Web Crypto, so the bundle integrity check
+// — the thing that proves the code about to be executed is the code that was
+// compiled — could not run there at all. These pin the fallback against
+// published vectors and against Web Crypto itself, because a hash that is
+// merely plausible is worse than none: it would verify nothing while appearing
+// to.
+
+test("sha256 fallback matches the published FIPS 180-4 vectors", () => {
+  const context = pluginContext();
+  for (const [input, want] of [
+    ["", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"],
+    ["abc", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"],
+    [
+      "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
+      "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1",
+    ],
+  ]) {
+    context.__input = input;
+    const got = vm.runInContext("sha256HexFallback(__input)", context);
+    assert.equal(got, want, `vector ${JSON.stringify(input)}`);
+  }
+});
+
+test("sha256 fallback agrees with Web Crypto, including multi-byte input", async () => {
+  const context = pluginContext();
+  for (const input of [
+    "platformkit",
+    "sticker · mule — Collect",   // multi-byte
+    "\u{1F600} emoji surrogate pair",
+    "x".repeat(1000),             // spans multiple 64-byte blocks
+  ]) {
+    context.__input = input;
+    const fallback = vm.runInContext("sha256HexFallback(__input)", context);
+    const viaCrypto = Array.from(
+      new Uint8Array(await webcrypto.subtle.digest("SHA-256", new TextEncoder().encode(input))),
+      b => b.toString(16).padStart(2, "0"),
+    ).join("");
+    assert.equal(fallback, viaCrypto, `input ${JSON.stringify(input.slice(0, 20))}`);
+  }
+});
+
+test("sha256Hex uses the fallback when the host has no Web Crypto", async () => {
+  const context = pluginContext();
+  // Reproduce the Figma sandbox: no crypto, no TextEncoder.
+  vm.runInContext("crypto = undefined; TextEncoder = undefined;", context);
+  const got = await vm.runInContext(`sha256Hex("abc")`, context);
+  assert.equal(got, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+});
+
+// --- component property definition ownership -------------------------------
+//
+// Figma throws when componentPropertyDefinitions is read from a variant. Every
+// managed component IS a variant of its set, so reading it directly aborted
+// conformance on any real library. These pin the resolution both ways.
+
+test("property definitions resolve to the set when the node is a variant", () => {
+  const context = pluginContext();
+  const set = { type: "COMPONENT_SET", componentPropertyDefinitions: { "size#1": { type: "VARIANT" } } };
+  const variant = { type: "COMPONENT", parent: set };
+  context.__variant = variant;
+  const owner = vm.runInContext("propertyDefinitionOwner(__variant)", context);
+  assert.equal(owner.type, "COMPONENT_SET", "a variant must defer to its set");
+});
+
+test("property definitions stay on the node when it is not a variant", () => {
+  const context = pluginContext();
+  const standalone = { type: "COMPONENT", parent: { type: "FRAME" }, componentPropertyDefinitions: {} };
+  context.__standalone = standalone;
+  const owner = vm.runInContext("propertyDefinitionOwner(__standalone)", context);
+  assert.equal(owner.type, "COMPONENT", "a non-variant component owns its own definitions");
+
+  // A missing parent must not throw — nodes are inspected mid-rebuild.
+  context.__orphan = { type: "COMPONENT" };
+  assert.equal(vm.runInContext("propertyDefinitionOwner(__orphan).type", context), "COMPONENT");
+});
+
+// --- instance graph ownership ----------------------------------------------
+//
+// The contract lists the instances a variant OWNS. Figma's findAll recurses
+// into instances too, so a component composing another composed component
+// counted its dependency's children as its own and failed conformance.
+
+function fakeInstance(sourceId, variantId, children = []) {
+  const main = {
+    type: "COMPONENT",
+    getSharedPluginData: (_, key) =>
+      key === "pkSourceId" ? sourceId : key === "pkVariantId" ? variantId : "",
+  };
+  return { type: "INSTANCE", mainComponent: main, children };
+}
+
+test("instance graph counts owned instances, not those nested inside them", async () => {
+  const context = pluginContext();
+  // A book instance that itself contains ten instances, plus one upload cell.
+  const book = fakeInstance("component/book", "component/book/variant/x", [
+    fakeInstance("component/dot", "component/dot/variant/y"),
+    fakeInstance("component/slot", "component/slot/variant/z"),
+  ]);
+  const cell = fakeInstance("component/cell", "component/cell/variant/w");
+  const master = { type: "COMPONENT", children: [{ type: "FRAME", children: [book] }, cell] };
+
+  context.__master = master;
+  context.__component = { id: "component/preview" };
+  context.__variant = {
+    id: "preview-default",
+    instances: [
+      { component_source_id: "component/book", variant_source_id: "component/book/variant/x" },
+      { component_source_id: "component/cell", variant_source_id: "component/cell/variant/w" },
+    ],
+  };
+
+  // Must not throw: the book's two nested instances belong to the book.
+  await vm.runInContext(
+    "validateVariantInstances(__master, __component, __variant)",
+    context,
+  );
+});
+
+test("instance graph still rejects a genuinely wrong composition", async () => {
+  const context = pluginContext();
+  const master = {
+    type: "COMPONENT",
+    children: [fakeInstance("component/unexpected", "component/unexpected/variant/q")],
+  };
+  context.__master = master;
+  context.__component = { id: "component/preview" };
+  context.__variant = {
+    id: "preview-default",
+    instances: [{ component_source_id: "component/book", variant_source_id: "component/book/variant/x" }],
+  };
+  await assert.rejects(
+    () => vm.runInContext("validateVariantInstances(__master, __component, __variant)", context),
+    /wrong instance graph/,
+  );
+});
