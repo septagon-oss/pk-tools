@@ -2138,11 +2138,24 @@ function upsertVariable(existing, collection, varSpec) {
     if (existing[name].resolvedType && existing[name].resolvedType !== resolvedType) {
       throw new Error(`variable "${collection.name}/${name}" type mismatch: existing ${existing[name].resolvedType}, bundle ${resolvedType}`);
     }
+    applyVariableScopes(existing[name], varSpec.scopes);
     return existing[name];
   }
   const variable = figma.variables.createVariable(name, collection, resolvedType);
+  applyVariableScopes(variable, varSpec.scopes);
   existing[name] = variable;
   return variable;
+}
+
+// applyVariableScopes narrows where Figma offers a variable. The bundle decides
+// which scopes apply, because the token taxonomy is the compiler's to know; an
+// absent or empty list leaves Figma's own default of every scope. A rejected
+// scope name must not fail an import, so this never throws.
+function applyVariableScopes(variable, scopes) {
+  if (!Array.isArray(scopes) || scopes.length === 0) return;
+  try {
+    variable.scopes = scopes;
+  } catch (_err) {}
 }
 
 function setVariableValues(variable, varSpec, modeMap) {
