@@ -116,6 +116,19 @@ figma.ui.onmessage = async (message) => {
     return;
   }
 
+  if (message.type === "import-style-baseline") {
+    try {
+      const result = await importStyleBaseline(message.payload);
+      figma.ui.postMessage({ type: "style-baseline-success", result });
+      figma.notify("Stamped " + result.stamped + " styled node(s).");
+    } catch (error) {
+      const text = error && error.message ? error.message : String(error);
+      figma.ui.postMessage({ type: "style-baseline-error", message: text });
+      figma.notify(text, { error: true });
+    }
+    return;
+  }
+
   if (message.type === "export-style-changes") {
     try {
       const result = await exportStyleChanges({
@@ -2779,4 +2792,83 @@ async function exportStyleChanges(options) {
     filename,
     payload: `${JSON.stringify(changeSet, null, 2)}\n`,
   };
+}
+
+// importStyleBaseline installs the style baseline and stamps the nodes it
+// describes, which is what turns an imported library into an exportable one.
+//
+// Attribution is declared, never inferred: the baseline names, for each styled
+// rule, the component and the node inside it that expresses that rule. A node
+// the baseline does not name stays unstamped and is therefore skipped on
+// export, so an un-modelled part of a component can never be silently
+// attributed to the wrong CSS selector.
+async function importStyleBaseline(payload) {
+  const snapshot = validateStyleSnapshot(
+    typeof payload === "string" ? JSON.parse(payload) : payload,
+  );
+  if (!Array.isArray(snapshot.nodes) || snapshot.nodes.length === 0) {
+    throw new Error(
+      "component style baseline carries no node attributions; it cannot stamp anything to export from",
+    );
+  }
+  await ensureDocumentLoaded();
+
+  const wanted = [];
+  for (const entry of snapshot.nodes) {
+    if (
+      !isNonEmptyStringProperty(entry, "componentSourceId") ||
+      !isNonEmptyStringProperty(entry, "nodeName") ||
+      !isNonEmptyStringProperty(entry, "selector")
+    ) {
+      throw new Error(
+        "each style node attribution needs componentSourceId, nodeName and selector",
+      );
+    }
+    wanted.push(entry);
+  }
+
+  let stamped = 0;
+  const missing = [];
+  for (const entry of wanted) {
+    const node = findManagedStyleNode(entry.componentSourceId, entry.nodeName);
+    if (!node) {
+      missing.push(`${entry.componentSourceId} / ${entry.nodeName}`);
+      continue;
+    }
+    setMetadata(node, KEY_STYLE_SELECTOR, entry.selector);
+    stamped += 1;
+  }
+  if (stamped === 0) {
+    throw new Error(
+      "No described node was found in this file. Import the design bundle before the style baseline.",
+    );
+  }
+  await storeStyleBaseline(snapshot);
+  return { stylesheet: snapshot.stylesheet, stamped, missing };
+}
+
+// findManagedStyleNode locates one named node inside the managed component set
+// that owns it.
+function findManagedStyleNode(componentSourceId, nodeName) {
+  for (const page of figma.root.children) {
+    if (!page.findAll) {
+      continue;
+    }
+    const sets = page.findAll(
+      (node) => sharedPluginValue(node, "pkSourceId") === componentSourceId,
+    );
+    for (const set of sets) {
+      if (set.name === nodeName) {
+        return set;
+      }
+      if (!set.findAll) {
+        continue;
+      }
+      const matches = set.findAll((node) => node.name === nodeName);
+      if (matches.length > 0) {
+        return matches[0];
+      }
+    }
+  }
+  return null;
 }

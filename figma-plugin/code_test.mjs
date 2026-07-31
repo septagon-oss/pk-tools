@@ -759,3 +759,165 @@ test("style export refuses when no managed styled nodes exist", async () => {
     /No managed styled nodes/,
   );
 });
+
+// --- style baseline import + stamping ------------------------------------
+//
+// These close the wiring gap: without stamping, export has nothing to read and
+// the loop only works against hand-made fakes. A node carries its CSS
+// attribution because the baseline declared it, never because the plugin
+// guessed from a name.
+
+function managedNode(name, properties = {}) {
+  const store = new Map();
+  return {
+    name,
+    getSharedPluginData(namespace, key) {
+      return store.get(key) || "";
+    },
+    setSharedPluginData(namespace, key, value) {
+      store.set(key, value);
+    },
+    ...properties,
+  };
+}
+
+function componentSet(sourceId, children) {
+  const node = managedNode(sourceId, {
+    findAll(predicate) {
+      return children.filter(predicate);
+    },
+  });
+  node.setSharedPluginData("platformkit", "pkSourceId", sourceId);
+  return node;
+}
+
+function stampContext(sets) {
+  const context = pluginContext();
+  const store = new Map();
+  context.figma.clientStorage = {
+    async getAsync(key) {
+      return store.get(key);
+    },
+    async setAsync(key, value) {
+      store.set(key, value);
+    },
+  };
+  context.figma.root.setPluginData = () => {};
+  context.figma.root.getPluginData = () => "";
+  // Figma's findAll walks every descendant, so the fake must too: a stamped
+  // child is exactly what export has to discover.
+  const everything = [];
+  for (const set of sets) {
+    everything.push(set);
+    for (const child of set.findAll(() => true)) {
+      everything.push(child);
+    }
+  }
+  context.figma.root.children = [
+    {
+      findAll(predicate) {
+        return everything.filter(predicate);
+      },
+    },
+  ];
+  return context;
+}
+
+function baselineWithNodes() {
+  return {
+    schemaVersion: "pk.design.component-styles.v1",
+    stylesheet: "collect.css",
+    digest: `sha256:${"b".repeat(64)}`,
+    styles: [{ selector: ".pill", property: "padding-left", value: "10px" }],
+    nodes: [
+      {
+        componentSourceId: "component/collectpill",
+        nodeName: "PillBody",
+        selector: ".pill",
+      },
+    ],
+  };
+}
+
+test("style baseline import stamps the nodes it describes", async () => {
+  const body = managedNode("PillBody", { paddingLeft: 10 });
+  const context = stampContext([componentSet("component/collectpill", [body])]);
+  context.__baseline = baselineWithNodes();
+
+  const result = await vm.runInContext("importStyleBaseline(__baseline)", context);
+  assert.equal(result.stamped, 1);
+  assert.equal(result.missing.length, 0);
+  assert.equal(
+    body.getSharedPluginData("platformkit", "pkStyleSelector"),
+    ".pill",
+    "the node now declares which CSS rule it stands for",
+  );
+});
+
+test("stamped nodes become exportable, closing the loop on real nodes", async () => {
+  const body = managedNode("PillBody", { paddingLeft: 10 });
+  const context = stampContext([componentSet("component/collectpill", [body])]);
+  context.__baseline = baselineWithNodes();
+  await vm.runInContext("importStyleBaseline(__baseline)", context);
+
+  // The designer widens the padding in Figma.
+  body.paddingLeft = 16;
+
+  const result = await vm.runInContext(
+    `exportStyleChanges({ author: "designer", reason: "roomier pill" })`,
+    context,
+  );
+  const payload = JSON.parse(result.payload);
+  assert.equal(payload.changes.length, 1);
+  assert.equal(payload.changes[0].before.value, "10px");
+  assert.equal(payload.changes[0].after.value, "16px");
+  assert.equal(payload.changes[0].before.selector, ".pill");
+});
+
+test("style baseline import reports nodes the file does not contain", async () => {
+  const body = managedNode("PillBody", { paddingLeft: 10 });
+  const baseline = baselineWithNodes();
+  baseline.nodes.push({
+    componentSourceId: "component/collectpill",
+    nodeName: "AbsentPart",
+    selector: ".pill-absent",
+  });
+  const context = stampContext([componentSet("component/collectpill", [body])]);
+  context.__baseline = baseline;
+
+  const result = await vm.runInContext("importStyleBaseline(__baseline)", context);
+  assert.equal(result.stamped, 1);
+  assert.equal(result.missing.length, 1);
+  assert.equal(result.missing[0], "component/collectpill / AbsentPart");
+});
+
+test("style baseline import refuses a baseline with no attributions", async () => {
+  const context = stampContext([]);
+  const baseline = baselineWithNodes();
+  delete baseline.nodes;
+  context.__baseline = baseline;
+  await assert.rejects(
+    () => vm.runInContext("importStyleBaseline(__baseline)", context),
+    /no node attributions/,
+  );
+});
+
+test("style baseline import refuses when nothing it describes exists", async () => {
+  const context = stampContext([componentSet("component/other", [])]);
+  context.__baseline = baselineWithNodes();
+  await assert.rejects(
+    () => vm.runInContext("importStyleBaseline(__baseline)", context),
+    /Import the design bundle before the style baseline/,
+  );
+});
+
+test("style baseline import requires complete attributions", async () => {
+  const baseline = baselineWithNodes();
+  baseline.nodes = [{ componentSourceId: "component/collectpill", nodeName: "PillBody" }];
+  const context = stampContext([componentSet("component/collectpill", [managedNode("PillBody")])]);
+  context.__baseline = baseline;
+  await assert.rejects(
+    () => vm.runInContext("importStyleBaseline(__baseline)", context),
+    /needs componentSourceId, nodeName and selector/,
+  );
+});
