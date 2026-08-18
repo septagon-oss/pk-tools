@@ -21,6 +21,7 @@ require (
 	github.com/tdewolff/minify/v2 v2.24.14 // indirect
 	github.com/tdewolff/parse/v2 v2.8.14 // indirect
 	golang.org/x/crypto v0.54.0 // indirect
+	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	maragu.dev/gomponents v1.3.0 // indirect
 	modernc.org/libc v1.74.3 // indirect
